@@ -1,0 +1,463 @@
+{
+  "created_utc": "2026-08-03T18:15:03+00:00",
+  "host": {
+    "platform": "Linux-6.8.0-79-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "processor": "x86_64",
+    "torch": "not installed",
+    "gpu": "none (CPU only)"
+  },
+  "rows": [
+    {
+      "scene": "angled",
+      "depth_model": "gt",
+      "mask_model": "gt",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.14919976447997918,
+        "perimeter_error_pct": 0.07405840038594569,
+        "ceiling_error_m": 0.01259009844489567,
+        "wall_errors_pct": [
+          0.07613799409798006,
+          0.09229819887652813,
+          0.0681056934295654,
+          0.023738523326688465,
+          0.09423324219137719
+        ],
+        "wall_error_mean_abs_pct": 0.07090273038442785,
+        "wall_error_max_abs_pct": 0.09423324219137719,
+        "wall_error_max_abs_m": 0.003502347728507438,
+        "n_walls_pred": 5,
+        "n_walls_gt": 5,
+        "matched_walls": 5,
+        "corner_rmse_m": 0.006898230201515194,
+        "openings_pred": 2,
+        "openings_gt": 2
+      },
+      "geometry": {
+        "chamfer_m": 0.013837887041670764,
+        "accuracy_m": 0.011948136846761569,
+        "completeness_m": 0.011928276673065518,
+        "accuracy_p95_m": 0.022935807520194217,
+        "completeness_p95_m": 0.026320843697535738,
+        "recall_5cm": 0.9819583333333334,
+        "precision_5cm": 0.9999833333333333
+      },
+      "psnr_db": NaN,
+      "runtime_s": 31.914111375808716,
+      "timings_s": {
+        "mask": 0.10967469215393066,
+        "depth": 0.0458989143371582,
+        "scale": 9.369850158691406e-05,
+        "fuse": 26.80838918685913,
+        "planes": 4.6372082233428955,
+        "layout": 0.31281113624572754
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.9764129030849819,
+      "error": null
+    },
+    {
+      "scene": "angled",
+      "depth_model": "gt",
+      "mask_model": "none",
+      "splat_model": "none",
+      "layout": {},
+      "geometry": {},
+      "psnr_db": NaN,
+      "runtime_s": 0.3484961986541748,
+      "timings_s": {},
+      "peak_vram_gb": 0.0,
+      "scale": 1.0,
+      "error": "MemoryError: TSDF volume is 40.1 M voxels even at the coarsest allowed 2 cm \u2014 the observed extent is [9.1, 5.7, 11.8] m, which is not a room."
+    },
+    {
+      "scene": "empty_rect",
+      "depth_model": "gt",
+      "mask_model": "gt",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.13597691144127122,
+        "perimeter_error_pct": 0.06804697269926496,
+        "ceiling_error_m": 0.011604470026266078,
+        "wall_errors_pct": [
+          0.06869025043125809,
+          0.0672404752442235,
+          0.06869025043125809,
+          0.06724047524420129
+        ],
+        "wall_error_mean_abs_pct": 0.06796536283773524,
+        "wall_error_max_abs_pct": 0.06869025043125809,
+        "wall_error_max_abs_m": 0.002884990518112751,
+        "n_walls_pred": 4,
+        "n_walls_gt": 4,
+        "matched_walls": 4,
+        "corner_rmse_m": 0.007195916247594313,
+        "openings_pred": 1,
+        "openings_gt": 1
+      },
+      "geometry": {
+        "chamfer_m": 0.013678916369172069,
+        "accuracy_m": 0.012006017358683254,
+        "completeness_m": 0.011900863698851669,
+        "accuracy_p95_m": 0.02327347572892236,
+        "completeness_p95_m": 0.0245561474511515,
+        "recall_5cm": 0.9850916666666667,
+        "precision_5cm": 0.9999
+      },
+      "psnr_db": NaN,
+      "runtime_s": 29.45095205307007,
+      "timings_s": {
+        "mask": 0.08698177337646484,
+        "depth": 0.03873801231384277,
+        "scale": 6.747245788574219e-05,
+        "fuse": 25.45850157737732,
+        "planes": 3.7936716079711914,
+        "layout": 0.07294869422912598
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.9764122971191799,
+      "error": null
+    },
+    {
+      "scene": "empty_rect",
+      "depth_model": "gt",
+      "mask_model": "none",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.13597691144127122,
+        "perimeter_error_pct": 0.06804697269926496,
+        "ceiling_error_m": 0.011604470026266078,
+        "wall_errors_pct": [
+          0.06869025043125809,
+          0.0672404752442235,
+          0.06869025043125809,
+          0.06724047524420129
+        ],
+        "wall_error_mean_abs_pct": 0.06796536283773524,
+        "wall_error_max_abs_pct": 0.06869025043125809,
+        "wall_error_max_abs_m": 0.002884990518112751,
+        "n_walls_pred": 4,
+        "n_walls_gt": 4,
+        "matched_walls": 4,
+        "corner_rmse_m": 0.007195916247594313,
+        "openings_pred": 1,
+        "openings_gt": 1
+      },
+      "geometry": {
+        "chamfer_m": 0.013678916369172069,
+        "accuracy_m": 0.012006017358683254,
+        "completeness_m": 0.011900863698851669,
+        "accuracy_p95_m": 0.02327347572892236,
+        "completeness_p95_m": 0.0245561474511515,
+        "recall_5cm": 0.9850916666666667,
+        "precision_5cm": 0.9999
+      },
+      "psnr_db": NaN,
+      "runtime_s": 28.968116760253906,
+      "timings_s": {
+        "mask": 0.0002906322479248047,
+        "depth": 0.04043912887573242,
+        "scale": 7.224082946777344e-05,
+        "fuse": 24.994064569473267,
+        "planes": 3.858982563018799,
+        "layout": 0.07423090934753418
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.9764122971191799,
+      "error": null
+    },
+    {
+      "scene": "furnished",
+      "depth_model": "gt",
+      "mask_model": "gt",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.11796735050175755,
+        "perimeter_error_pct": 0.05902747872386094,
+        "ceiling_error_m": 0.011254280212096734,
+        "wall_errors_pct": [
+          0.05946998129875425,
+          0.05847269937626631,
+          0.05946998129875425,
+          0.05847269937626631
+        ],
+        "wall_error_mean_abs_pct": 0.05897134033751028,
+        "wall_error_max_abs_pct": 0.05946998129875425,
+        "wall_error_max_abs_m": 0.002497739214547323,
+        "n_walls_pred": 4,
+        "n_walls_gt": 4,
+        "matched_walls": 4,
+        "corner_rmse_m": 0.007945697373661091,
+        "openings_pred": 6,
+        "openings_gt": 2
+      },
+      "geometry": {
+        "chamfer_m": 0.042190659933931465,
+        "accuracy_m": 0.013254886404952721,
+        "completeness_m": 0.014115360251526238,
+        "accuracy_p95_m": 0.026777213076292935,
+        "completeness_p95_m": 0.44363420862118425,
+        "recall_5cm": 0.7959916666666667,
+        "precision_5cm": 0.9950583333333334
+      },
+      "psnr_db": NaN,
+      "runtime_s": 47.37037110328674,
+      "timings_s": {
+        "mask": 0.09389114379882812,
+        "depth": 0.041773319244384766,
+        "scale": 7.033348083496094e-05,
+        "fuse": 31.702105283737183,
+        "planes": 15.459243535995483,
+        "layout": 0.07325243949890137
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.9764122971191799,
+      "error": null
+    },
+    {
+      "scene": "furnished",
+      "depth_model": "gt",
+      "mask_model": "none",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.11284574166170458,
+        "perimeter_error_pct": 0.057052708372795635,
+        "ceiling_error_m": 0.011576443460142194,
+        "wall_errors_pct": [
+          0.06208698990286532,
+          0.05074107182756471,
+          0.05074107182760912,
+          -31.359816971417665
+        ],
+        "wall_error_mean_abs_pct": 7.880846526243926,
+        "wall_error_max_abs_pct": 31.359816971417665,
+        "wall_error_max_abs_m": 1.317112312799542,
+        "n_walls_pred": 5,
+        "n_walls_gt": 4,
+        "matched_walls": 4,
+        "corner_rmse_m": 0.008242702236338901,
+        "openings_pred": 5,
+        "openings_gt": 2
+      },
+      "geometry": {
+        "chamfer_m": 0.044523927536217596,
+        "accuracy_m": 0.013505011674534955,
+        "completeness_m": 0.014614680122169724,
+        "accuracy_p95_m": 0.028555347007541584,
+        "completeness_p95_m": 0.4421338230378632,
+        "recall_5cm": 0.7966,
+        "precision_5cm": 0.982775
+      },
+      "psnr_db": NaN,
+      "runtime_s": 195.66432118415833,
+      "timings_s": {
+        "mask": 0.00031185150146484375,
+        "depth": 0.042540788650512695,
+        "scale": 7.104873657226562e-05,
+        "fuse": 186.90548133850098,
+        "planes": 8.644220113754272,
+        "layout": 0.07166314125061035
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.9764122971191799,
+      "error": null
+    },
+    {
+      "scene": "l_shaped",
+      "depth_model": "gt",
+      "mask_model": "gt",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.04937423101754046,
+        "perimeter_error_pct": 0.03884755357144165,
+        "ceiling_error_m": 0.01399557277848995,
+        "wall_errors_pct": [
+          0.1276564265333402,
+          -0.029269396915054813,
+          0.147096409438352,
+          0.11404843849984747,
+          -0.09891061053545203,
+          -0.06409000372525897
+        ],
+        "wall_error_mean_abs_pct": 0.09684521427455091,
+        "wall_error_max_abs_pct": 0.147096409438352,
+        "wall_error_max_abs_m": 0.006510477753200128,
+        "n_walls_pred": 6,
+        "n_walls_gt": 6,
+        "matched_walls": 6,
+        "corner_rmse_m": 0.0073868191496842175,
+        "openings_pred": 2,
+        "openings_gt": 2
+      },
+      "geometry": {
+        "chamfer_m": 0.01633731664101172,
+        "accuracy_m": 0.013691703963590464,
+        "completeness_m": 0.01368286407737011,
+        "accuracy_p95_m": 0.02623706784758108,
+        "completeness_p95_m": 0.032441697824978064,
+        "recall_5cm": 0.9715833333333334,
+        "precision_5cm": 0.9997666666666667
+      },
+      "psnr_db": NaN,
+      "runtime_s": 72.89603447914124,
+      "timings_s": {
+        "mask": 0.19081807136535645,
+        "depth": 0.12845277786254883,
+        "scale": 0.00010275840759277344,
+        "fuse": 58.74798250198364,
+        "planes": 13.679507493972778,
+        "layout": 0.14913177490234375
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.976411429372078,
+      "error": null
+    },
+    {
+      "scene": "l_shaped",
+      "depth_model": "gt",
+      "mask_model": "none",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.4132105935178654,
+        "perimeter_error_pct": 0.19365010969880636,
+        "ceiling_error_m": 0.013273640046735036,
+        "wall_errors_pct": [
+          -0.11442588728022285,
+          0.10517378475196626,
+          0.10126963678815937,
+          -0.03933284280033256,
+          -0.07687936504028325,
+          -86.82124240689055
+        ],
+        "wall_error_mean_abs_pct": 14.543053987258586,
+        "wall_error_max_abs_pct": 86.82124240689055,
+        "wall_error_max_abs_m": 4.427883362751418,
+        "n_walls_pred": 9,
+        "n_walls_gt": 6,
+        "matched_walls": 6,
+        "corner_rmse_m": 0.7232692331095232,
+        "openings_pred": 2,
+        "openings_gt": 2
+      },
+      "geometry": {
+        "chamfer_m": 0.016625341391367076,
+        "accuracy_m": 0.013972200542583526,
+        "completeness_m": 0.013667264855562206,
+        "accuracy_p95_m": 0.027652429540286565,
+        "completeness_p95_m": 0.0304460892268858,
+        "recall_5cm": 0.972525,
+        "precision_5cm": 0.9887166666666667
+      },
+      "psnr_db": NaN,
+      "runtime_s": 186.99424195289612,
+      "timings_s": {
+        "mask": 0.00043392181396484375,
+        "depth": 0.06422138214111328,
+        "scale": 0.00010156631469726562,
+        "fuse": 173.70485091209412,
+        "planes": 13.125069618225098,
+        "layout": 0.09952616691589355
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.976411429372078,
+      "error": null
+    },
+    {
+      "scene": "mirror_heavy",
+      "depth_model": "gt",
+      "mask_model": "gt",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 0.09719871544238146,
+        "perimeter_error_pct": 0.04779332841620132,
+        "ceiling_error_m": 0.01126648799547425,
+        "wall_errors_pct": [
+          0.05568585997164366,
+          0.041498094913650085,
+          0.041498094913650085,
+          0.05568585997164366
+        ],
+        "wall_error_mean_abs_pct": 0.04859197744264687,
+        "wall_error_max_abs_pct": 0.05568585997164366,
+        "wall_error_max_abs_m": 0.001865476309050429,
+        "n_walls_pred": 4,
+        "n_walls_gt": 4,
+        "matched_walls": 4,
+        "corner_rmse_m": 0.007766297162722978,
+        "openings_pred": 8,
+        "openings_gt": 2
+      },
+      "geometry": {
+        "chamfer_m": 0.05018772401037542,
+        "accuracy_m": 0.013641286172211699,
+        "completeness_m": 0.015334450217648801,
+        "accuracy_p95_m": 0.027669016857610668,
+        "completeness_p95_m": 0.45092900860926355,
+        "recall_5cm": 0.71645,
+        "precision_5cm": 0.9946833333333334
+      },
+      "psnr_db": NaN,
+      "runtime_s": 39.789721727371216,
+      "timings_s": {
+        "mask": 0.09546589851379395,
+        "depth": 0.04559659957885742,
+        "scale": 7.271766662597656e-05,
+        "fuse": 26.143970727920532,
+        "planes": 13.381370067596436,
+        "layout": 0.11139535903930664
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.9764122971191799,
+      "error": null
+    },
+    {
+      "scene": "mirror_heavy",
+      "depth_model": "gt",
+      "mask_model": "none",
+      "splat_model": "none",
+      "layout": {
+        "area_error_pct": 51.73666419310028,
+        "perimeter_error_pct": 104.596709322758,
+        "ceiling_error_m": 0.010502966163185246,
+        "wall_errors_pct": [
+          -61.47472971618574,
+          -68.46921540771503,
+          -81.55304387418683,
+          -91.044776119403
+        ],
+        "wall_error_mean_abs_pct": 75.63544127937266,
+        "wall_error_max_abs_pct": 91.044776119403,
+        "wall_error_max_abs_m": 3.425227842715847,
+        "n_walls_pred": 43,
+        "n_walls_gt": 4,
+        "matched_walls": 4,
+        "corner_rmse_m": 1.2785865206651827,
+        "openings_pred": 6,
+        "openings_gt": 2
+      },
+      "geometry": {
+        "chamfer_m": 0.11999897472151863,
+        "accuracy_m": 0.01529418673440303,
+        "completeness_m": 0.017154393073320364,
+        "accuracy_p95_m": 1.2710011862060888,
+        "completeness_p95_m": 0.42727085762285155,
+        "recall_5cm": 0.7378416666666666,
+        "precision_5cm": 0.86275
+      },
+      "psnr_db": NaN,
+      "runtime_s": 214.19428515434265,
+      "timings_s": {
+        "mask": 0.00040721893310546875,
+        "depth": 0.06626439094543457,
+        "scale": 8.082389831542969e-05,
+        "fuse": 197.9180839061737,
+        "planes": 16.16924262046814,
+        "layout": 0.040166616439819336
+      },
+      "peak_vram_gb": 0.0,
+      "scale": 0.9764122971191799,
+      "error": null
+    }
+  ]
+}

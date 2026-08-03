@@ -1,0 +1,35 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Rust
+core/target/
+core/Cargo.lock
+
+# Data and artifacts — never commit captures or reconstructions
+data/*
+!data/.gitkeep
+out/
+runs/
+*.ply
+*.spz
+*.glb
+*.npy
+*.npz
+weights/
+checkpoints/
+
+# Client build products
+clients/ios/build/
+clients/ios/DerivedData/
+clients/android/build/
+clients/android/.gradle/
+clients/android/app/build/
+*.xcuserstate
+local.properties

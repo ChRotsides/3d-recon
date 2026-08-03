@@ -1,0 +1,23 @@
+[package]
+name = "recon-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared capture-guidance core for the room-to-house scanner (plan §3.8, §6.1)"
+license = "Proprietary"
+
+[lib]
+# cdylib for the mobile targets, rlib so the desktop tests can link it directly.
+crate-type = ["cdylib", "rlib"]
+name = "recon_core"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+approx = "0.5"
+
+[profile.release]
+lto = true
+opt-level = 3
+panic = "abort"

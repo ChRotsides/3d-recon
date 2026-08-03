@@ -116,6 +116,81 @@ def corridor_room(
     )
 
 
+#: Which wall index carries which outward direction, for the footprint
+#: [(0,0), (w,0), (w,d), (0,d)] that `grid_room` builds.
+WALL_FOR_DIRECTION = {"-z": 0, "+x": 1, "+z": 2, "-x": 3}
+
+
+def grid_room(
+    name: str,
+    width_m: float,
+    depth_m: float,
+    doors: set[str],
+    *,
+    ceiling_m: float = 2.45,
+) -> synth.RoomSpec:
+    """A rectangular room with doors on named sides ("+x", "-x", "+z", "-z").
+
+    Doors are placed at the midpoint of their wall so that two rooms sharing a
+    wall agree on where the opening is. Each wall runs in its own direction
+    around the CCW footprint, so `u` is measured differently on each — getting
+    that wrong puts the two halves of a shared doorway in different places and
+    the rooms stitch into the wrong relative position.
+    """
+    w, d = width_m, depth_m
+    openings: list[synth.OpeningSpec] = []
+    dw, dh = synth.DEFAULT_DOOR_WIDTH_M, synth.DEFAULT_DOOR_HEIGHT_M
+    # Wall 0 runs +x from (0,0); wall 1 runs +z from (w,0);
+    # wall 2 runs -x from (w,d); wall 3 runs -z from (0,d).
+    centres = {"-z": w / 2, "+x": d / 2, "+z": w / 2, "-x": d / 2}
+    for side in sorted(doors):
+        openings.append(
+            synth.OpeningSpec(WALL_FOR_DIRECTION[side], centres[side], dw, dh, kind="door")
+        )
+    return synth.RoomSpec(
+        name=name,
+        footprint=[(0.0, 0.0), (w, 0.0), (w, d), (0.0, d)],
+        ceiling_height_m=ceiling_m,
+        openings=openings,
+        exterior=False,
+    )
+
+
+def loop_house(width_m: float = 4.0, depth_m: float = 3.4, seed: int = 0) -> HouseSpec:
+    """Four rooms in a 2x2 block, every neighbour joined by a doorway.
+
+    A chain has no redundancy: every doorway is load-bearing and an error in one
+    propagates to everything downstream. A loop is the case plan §6.3's loop
+    closures exist for — the fourth edge is over-determined, and using it is
+    what pulls accumulated drift back.
+
+    Layout (x right, z up):  room_3  room_2
+                             room_0  room_1
+    """
+    rng = np.random.default_rng(seed)
+    w, d = width_m, depth_m
+    spec = [
+        ("room_0", 0.0, 0.0, {"+x", "+z"}),
+        ("room_1", w, 0.0, {"-x", "+z"}),
+        ("room_2", w, d, {"-x", "-z"}),
+        ("room_3", 0.0, d, {"+x", "-z"}),
+    ]
+    rooms = [
+        RoomPlacement(
+            room_id=rid,
+            spec=grid_room(rid, w, d, doors),
+            tx=tx, tz=tz,
+            vio_scale_error=float(1.0 + rng.normal(0.0, 0.02)),
+        )
+        for rid, tx, tz, doors in spec
+    ]
+    return HouseSpec(
+        name="loop",
+        rooms=rooms,
+        connections=[(0, 1), (1, 2), (2, 3), (3, 0)],
+    )
+
+
 def corridor_house(n_rooms: int = 6, seed: int = 0) -> HouseSpec:
     """`n_rooms` rooms in a row, each joined to the previous by one doorway.
 

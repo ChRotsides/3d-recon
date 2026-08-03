@@ -147,13 +147,17 @@ Found while building; all verified. See [`licensing-audit.md`](licensing-audit.m
 | Room stitching solver (§6.3) | done | 29 tests |
 | Room isolation in a connected house | done | ±0.1% area |
 | Integrated stitch -> drift target | done | 12.6 cm on 6 rooms, see §7b |
-| GLB / SPZ / PDF export | done | 18 tests |
+| GLB / SPZ / PDF / glTF-splat export | done | 22 tests |
+| Cloud service (Phase 2) | done | 19 tests |
+| Loop-closure detection (§6.3) | done | 7.9 -> 6.2 cm on a 2x2 house |
+| Automatic doorway pairing | **unreliable** | see §7d |
+| Walkthrough viewer (§3.8) | done | 11 tests |
 | Android pose logger | **builds** | APK + 6 JVM tests |
 | DA3 / MapAnything / SAM 3 adapters | written | ❌ needs GPU |
 | PGSR clean-room trainer | **not written** | see §6 |
 | iOS pose logger | source only | ❌ needs a Mac |
 | Licensing audit | done | re-runnable |
-| Cloud service (Phase 2) | not started | |
+
 
 
 ---
@@ -306,6 +310,40 @@ itself showed 8.8 cm, which is a global frame offset and not drift at all.
 
 ---
 
+## 7d. Automatic doorway pairing fails in a symmetric block of rooms
+
+Loop closures are now detected (plan §6.3 lists them among the graph's inputs;
+nothing was producing them, so the graph was always a tree and every doorway was
+load-bearing). On a 2×2 house told only three of its four connections, the
+fourth is found from geometry and drift improves:
+
+| | worst | RMS |
+|---|---|---|
+| 3 edges, no closure | 7.9 cm | 5.6 cm |
+| 3 edges + auto closure | **6.2 cm** | **4.6 cm** |
+
+**But the automatic doorway *pairing* is not reliable in that house.** Given
+four near-identical 4.0 × 3.4 m rooms each with two doors, the pairing for
+room_2 → room_3 chose the wrong door and placed room_3 **rotated 90°** with a
+4.8% scale error. It passed every gate: ICP RMSE 1.25 cm, overlap 0.70,
+no doorway reused, and the rooms did not interpenetrate enough to trip the
+threshold. With the correct pairing supplied, the same data solves cleanly and
+the loop closure fires.
+
+The plan's own answer is the user's tap — "user taps the same doorway in both
+rooms" (§6.3 path B step 1) — and `stitch(pairing=...)` takes it. The automatic
+path is a convenience that must not be trusted in a symmetric layout. The likely
+fix is to check a candidate against *every* already-placed room rather than only
+its partner, and to treat a pose-graph scale far from its §6.2 prior as
+evidence against the placement; neither is implemented.
+
+**This was hidden by a bad metric.** Drift was being measured as centroid error
+only. A 4.0 × 3.4 m room is nearly square, so a 90° rotation barely moves the
+centroid — the metric reported 13.5 cm for a house with a room turned on its
+side. Tests now assert per-room yaw as well as position. (The corridor house's
+rotation-invariant measurement remains correct: there the rooms *are* 180°
+symmetric, so a half-turn is a genuinely equivalent solution.)
+
 ## 7c. SPZ is not verified byte-compatible
 
 `recon/io/export.py` implements the SPZ *scheme* from plan §3.7 — quantise,
@@ -323,6 +361,28 @@ under 0.3° for one extra byte per splat.
 
 Before any client consumes these files, validate against the reference decoder
 or generate them with the reference encoder.
+
+## 7e. Viewer
+
+Plan §3.8 chooses an embedded WebView running Babylon.js over two native splat
+renderers. `viewer/` is that page and `recon.io.viewer` writes the manifest it
+consumes — relative artifact paths plus each room's house-frame transform, so
+the same file works served from S3, from disk, or from the app's assets.
+
+Two things are deliberate:
+
+* **Babylon is left-handed by default**; everything upstream is right-handed,
+  Y-up (§5). The manifest states its frame *and* the conversion required, and
+  `applyFrame()` throws on an unlabelled scene rather than defaulting. A wrong
+  guess renders a mirrored house that looks entirely plausible — §7's failure
+  mode, and one that only a measurement catches.
+* **Babylon is loaded from a vendored copy, not a CDN.** A capture review
+  happens in the property being scanned; depending on signal in someone's
+  basement is not a viewer.
+
+The vendored `viewer/vendor/babylon.js` is *not* committed — it is a build-time
+asset the app bundles. The page reports a clear error if it is absent rather
+than silently rendering nothing.
 
 ## 8. Next
 

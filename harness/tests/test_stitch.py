@@ -645,3 +645,117 @@ def test_house_drift_end_to_end(tmp_path):
     area = sum(abs(geom.polygon_area(p)) for p in footprints.values())
     truth_area = sum(r["area_m2"] for r in gt.rooms)
     assert abs(area / truth_area - 1.0) < 0.05, f"total area {area:.2f} vs {truth_area:.2f}"
+
+
+# -- loop closure (PLAN §6.3) -----------------------------------------------
+
+
+def _rigid_drift(footprints, gt_rooms):
+    """Per-room centroid error after a rigid best-fit to truth.
+
+    The best-fit removes the arbitrary global frame — without it the anchor room
+    itself shows several centimetres, which is an offset and not drift.
+    """
+    import numpy as np
+
+    R = np.array([footprints[r["room_id"]].mean(axis=0) for r in gt_rooms])
+    T = np.array([
+        (np.asarray(r["footprint"]) + np.array([r["tx"], r["tz"]])).mean(axis=0)
+        for r in gt_rooms
+    ])
+    mr, mt = R.mean(axis=0), T.mean(axis=0)
+    u, _s, vt = np.linalg.svd((R - mr).T @ (T - mt))
+    d = np.sign(np.linalg.det(vt.T @ u.T))
+    rot = vt.T @ np.diag([1, d]) @ u.T
+    return np.linalg.norm((R - mr) @ rot.T + mt - T, axis=1)
+
+
+@pytest.mark.slow
+def test_loop_closure_is_found_and_reduces_drift(tmp_path):
+    """PLAN §6.3 lists loop closures among the graph's inputs, but nothing was
+    producing them, so the graph was always a tree and every doorway was
+    load-bearing.
+
+    Four rooms in a 2x2 block. The stitcher is told about only three of the four
+    connections; the fourth has to be discovered from geometry, and using it must
+    measurably pull the drift back.
+    """
+    import numpy as np
+    from recon import synth, synth_house
+    from recon.layout.doorways import doorway_frame
+    from recon.masking.base import GroundTruthMasker
+    from recon.pipeline import Pipeline
+    from recon.stitch.house import house_footprints, reconstruct_rooms, stitch
+
+    up = np.array([0.0, 1.0, 0.0])
+    house = synth_house.loop_house(seed=2)
+    cfg = synth.CaptureConfig(width=130, height=98, n_stations=3, yaw_step_deg=36,
+                              max_keyframes=60)
+    gt = synth_house.generate_house(house, tmp_path, cfg)
+    rooms = reconstruct_rooms([tmp_path / r["room_id"] for r in gt.rooms],
+                              Pipeline(masker=GroundTruthMasker()))
+
+    # Name each doorway by the side of its room it sits on, so the pairing below
+    # is the user's tap (§6.3 path B step 1) rather than a guess.
+    side = {}
+    for rid, room in rooms.items():
+        centre = np.asarray(room.layout.footprint).mean(axis=0)
+        for dw in room.doorways:
+            c, _n, _a = doorway_frame(dw, up)
+            d = np.array([c[0], c[2]]) - centre
+            key = ("+x" if d[0] > 0 else "-x") if abs(d[0]) > abs(d[1]) else (
+                "+z" if d[1] > 0 else "-z")
+            side[(rid, key)] = dw.id
+
+    pairing = {
+        ("room_0", "room_1"): (side[("room_0", "+x")], side[("room_1", "-x")]),
+        ("room_1", "room_2"): (side[("room_1", "+z")], side[("room_2", "-z")]),
+        ("room_2", "room_3"): (side[("room_2", "-x")], side[("room_3", "+x")]),
+    }
+    conns = list(pairing)
+
+    open_ = stitch(rooms, conns, up, property_id="p", pairing=pairing, find_loops=False)
+    closed = stitch(rooms, conns, up, property_id="p", pairing=pairing, find_loops=True)
+
+    assert len(open_.graph.floors[0].edges) == 3
+    assert len(closed.graph.floors[0].edges) == 4, (
+        f"the closing doorway was not found: {closed.rejected}"
+    )
+    auto = [e for e in closed.graph.floors[0].edges if e.source.value == "auto_registered"]
+    assert len(auto) == 1
+    assert set(auto[0].via_doorway) == {side[("room_3", "-z")], side[("room_0", "+z")]}
+
+    before = _rigid_drift(house_footprints(open_), gt.rooms)
+    after = _rigid_drift(house_footprints(closed), gt.rooms)
+    assert after.max() <= before.max() + 1e-9, f"{after.max():.3f} vs {before.max():.3f}"
+    assert after.max() <= 0.15, f"worst drift {after.max()*100:.1f} cm"
+
+    # Every room must also be the right way round. A 4.0 x 3.4 room is nearly
+    # square, so a 90-degree error barely moves the centroid — measuring position
+    # alone once hid exactly that.
+    for r in gt.rooms:
+        yaw = np.degrees(closed.pose.nodes[r["room_id"]].yaw_rad)
+        assert abs((yaw + 180) % 360 - 180) < 5.0, f"{r['room_id']} yaw {yaw:.1f} deg"
+
+
+@pytest.mark.slow
+def test_loop_closure_does_not_invent_edges_in_a_chain(tmp_path):
+    """A corridor has no loop. If the detector fires there it is matching
+    coincidence, not geometry, and would inject a false constraint."""
+    import numpy as np
+    from recon import synth, synth_house
+    from recon.masking.base import GroundTruthMasker
+    from recon.pipeline import Pipeline
+    from recon.stitch.house import reconstruct_rooms, stitch
+
+    house = synth_house.corridor_house(n_rooms=3, seed=1)
+    cfg = synth.CaptureConfig(width=130, height=98, n_stations=3, yaw_step_deg=36,
+                              max_keyframes=60)
+    gt = synth_house.generate_house(house, tmp_path, cfg)
+    rooms = reconstruct_rooms([tmp_path / r["room_id"] for r in gt.rooms],
+                              Pipeline(masker=GroundTruthMasker()))
+    conns = [(gt.rooms[a]["room_id"], gt.rooms[b]["room_id"]) for a, b in gt.connections]
+    result = stitch(rooms, conns, np.array([0.0, 1.0, 0.0]), property_id="p",
+                    find_loops=True)
+    auto = [e for e in result.graph.floors[0].edges if e.source.value == "auto_registered"]
+    assert not auto, f"invented {len(auto)} loop closures in a chain"

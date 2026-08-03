@@ -30,6 +30,7 @@ from recon.depth.base import DepthEstimator, DepthResult, GroundTruthDepth
 from recon.fusion.tsdf import TSDFConfig, TSDFVolume, fuse
 from recon.io.bundle import BundleDir
 from recon.io.export import write_glb, write_pdf_floorplan
+from recon.io.viewer import build_scene, write_scene
 from recon.layout.floorplan import FloorplanConfig, build_layout, to_svg
 from recon.layout.planes import PlaneConfig, PlaneSet, extract_planes
 from recon.masking.base import Masker, MaskResult, NullMasker
@@ -198,6 +199,23 @@ class Pipeline:
 
         if self.config.export_pdf and len(result.layout.footprint) >= 3:
             write_pdf_floorplan(out_dir / "floorplan.pdf", result.layout)
+
+        # A single-room scene the WebView viewer can open directly (PLAN §3.8).
+        # Multi-room scenes are assembled by the stitcher, which knows where the
+        # rooms go; this one is the degenerate case of that, not a special path.
+        artifacts = {
+            kind: name
+            for kind, name in (("mesh", "room.glb"), ("ply", "fused_mesh.ply"),
+                               ("plan_svg", "floorplan.svg"), ("plan_pdf", "floorplan.pdf"))
+            if (out_dir / name).exists()
+        }
+        write_scene(
+            out_dir / "scene.json",
+            build_scene(
+                result.room_id,
+                {result.room_id: {"layout": result.layout, "artifacts": artifacts}},
+            ),
+        )
 
 
 def _write_point_ply(path: Path, pts: np.ndarray, nrm: np.ndarray) -> None:

@@ -287,3 +287,70 @@ def test_assert_frame_catches_a_left_handed_artifact():
     with pytest.raises(FrameMismatch):
         assert_frame(CoordinateFrame(up_axis=UpAxis.Z_UP))
     assert_frame(CANONICAL_FRAME)
+
+
+# -- glTF KHR_gaussian_splatting (plan §3.7, behind a feature flag) ----------
+
+
+def test_gltf_splat_declares_the_extension_as_required(tmp_path):
+    """A viewer that ignores the extension renders a bare point cloud — no
+    covariance, no opacity, no view-dependent colour. Recognisably the room and
+    wrong in every way that matters, so it must fail to open instead."""
+    from recon.io.export import KHR_GAUSSIAN_SPLATTING, write_gltf_splat
+
+    c = _cloud(300, sh_per_channel=3)
+    write_gltf_splat(tmp_path / "s.gltf", c)
+    js, _ = read_glb(tmp_path / "s.gltf")
+    assert js["extensionsRequired"] == [KHR_GAUSSIAN_SPLATTING]
+    assert js["extensionsUsed"] == [KHR_GAUSSIAN_SPLATTING]
+
+
+def test_gltf_splat_carries_every_gaussian_attribute(tmp_path):
+    from recon.io.export import KHR_GAUSSIAN_SPLATTING, write_gltf_splat
+
+    c = _cloud(300, sh_per_channel=3)
+    write_gltf_splat(tmp_path / "s.gltf", c)
+    js, binary = read_glb(tmp_path / "s.gltf")
+
+    prim = js["meshes"][0]["primitives"][0]
+    assert prim["mode"] == 0, "splats are POINTS, not triangles"
+    ext = prim["extensions"][KHR_GAUSSIAN_SPLATTING]
+    for field in ("positions", "colors", "scales", "rotations"):
+        assert field in ext, field
+    assert ext["sphericalHarmonicsDegree"] == 1
+
+    assert js["accessors"][ext["positions"]]["count"] == len(c.positions)
+    # Colour and opacity travel together as RGBA.
+    assert js["accessors"][ext["colors"]]["type"] == "VEC4"
+    assert js["accessors"][ext["rotations"]]["type"] == "VEC4"
+    assert len(binary) > 0
+
+
+def test_gltf_splat_records_its_frame_and_count(tmp_path):
+    from recon.io.export import write_gltf_splat
+
+    c = _cloud(120)
+    write_gltf_splat(tmp_path / "s.gltf", c, extras={"room_id": "abc"})
+    js, _ = read_glb(tmp_path / "s.gltf")
+    extras = js["asset"]["extras"]
+    assert extras["gaussian_count"] == 120
+    assert extras["room_id"] == "abc"
+    assert_frame(CoordinateFrame(**extras["coordinate_frame"]))
+
+
+def test_gltf_splat_stores_linear_scales_not_log(tmp_path):
+    """3DGS carries log-scale internally; glTF consumers expect the actual
+    ellipsoid radii. Shipping log values renders every splat at roughly
+    e^-3 metres and the scene looks empty."""
+    import struct as _struct
+
+    from recon.io.export import KHR_GAUSSIAN_SPLATTING, write_gltf_splat
+
+    c = _cloud(50)
+    write_gltf_splat(tmp_path / "s.gltf", c)
+    js, binary = read_glb(tmp_path / "s.gltf")
+    ext = js["meshes"][0]["primitives"][0]["extensions"][KHR_GAUSSIAN_SPLATTING]
+    acc = js["accessors"][ext["scales"]]
+    view = js["bufferViews"][acc["bufferView"]]
+    vals = _struct.unpack_from(f"<{acc['count'] * 3}f", binary, view["byteOffset"])
+    assert np.allclose(np.array(vals).reshape(-1, 3), np.exp(c.scales), atol=1e-5)

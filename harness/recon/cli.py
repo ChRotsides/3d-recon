@@ -236,6 +236,41 @@ def validate(
 
 
 @app.command()
+def viewer(
+    rooms: Path = typer.Argument(..., help="Directory of per-room artifact folders."),
+    out: Path = typer.Option(Path("scene.json"), help="Where to write the manifest."),
+    property_id: str = typer.Option("property"),
+) -> None:
+    """Build a walkthrough scene manifest from reconstructed rooms (§3.8).
+
+    Reads each room's `layout.json` and lists whatever artifacts are present, so
+    it works whether or not the GPU splat stage has run.
+    """
+    from recon.io.viewer import build_scene, write_scene
+    from recon.schemas import RoomLayout
+
+    entries = {}
+    for d in sorted(p for p in rooms.iterdir() if (p / "layout.json").exists()):
+        layout = RoomLayout.model_validate_json((d / "layout.json").read_text())
+        artifacts = {
+            kind: f"{d.name}/{name}"
+            for kind, name in (("spz", "room.spz"), ("mesh", "room.glb"),
+                               ("plan_svg", "floorplan.svg"), ("plan_pdf", "floorplan.pdf"))
+            if (d / name).exists()
+        }
+        entries[layout.room_id] = {"layout": layout, "artifacts": artifacts}
+
+    if not entries:
+        raise typer.BadParameter(f"no reconstructed rooms under {rooms}")
+    scene = build_scene(property_id, entries)
+    write_scene(out, scene)
+    console.print(
+        f"[green]{len(scene.rooms)} room(s)[/green], {scene.total_area_m2:.2f} m² -> {out}"
+    )
+    console.print("open viewer/index.html?scene=<path to this file>")
+
+
+@app.command()
 def scale(
     bundle: Path = typer.Argument(...),
 ) -> None:

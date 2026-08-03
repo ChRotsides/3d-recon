@@ -17,6 +17,7 @@ import json
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -377,6 +378,125 @@ def _unpack_quaternions(words: np.ndarray) -> np.ndarray:
         out[np.ix_(sel, cols)] = keep[sel]
         out[sel, k] = largest[sel]
     return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
+
+
+# ---------------------------------------------------------------------------
+# glTF with KHR_gaussian_splatting (PLAN.md §3.7)
+# ---------------------------------------------------------------------------
+
+KHR_GAUSSIAN_SPLATTING = "KHR_gaussian_splatting"
+KHR_GAUSSIAN_SPLATTING_COMPRESSION_SPZ = "KHR_gaussian_splatting_compression_spz"
+
+
+def write_gltf_splat(
+    path: Path,
+    cloud: GaussianCloud,
+    *,
+    name: str = "room",
+    extras: dict | None = None,
+) -> Path:
+    """Write splats as glTF with `KHR_gaussian_splatting`.
+
+    Behind a feature flag, exactly as plan §3.7 asks: the extension's release
+    candidate landed in February 2026 and tool adoption is expected to follow,
+    so the point is to be ready rather than to switch. SPZ stays the delivery
+    format until viewers actually read this.
+
+    Both extensions are declared in `extensionsRequired`, not merely `used`: a
+    viewer that silently ignores them would render a point cloud with no
+    covariance, no opacity and no view-dependent colour — recognisably the room,
+    and wrong in every way that matters. Better to fail to open.
+
+    **Not validated against a viewer.** Like the SPZ writer, this is written
+    from the extension's documented shape and has not been checked against a
+    conformance suite or a real implementation. See docs/execution-status.md.
+    """
+    path = Path(path)
+    n = len(cloud.positions)
+
+    buffers: list[bytes] = []
+    views: list[dict] = []
+    accessors: list[dict] = []
+    offset = 0
+
+    def add(data: np.ndarray, type_: str, comp: int) -> int:
+        nonlocal offset
+        raw = np.ascontiguousarray(data).tobytes()
+        pad = (-len(raw)) % 4
+        buffers.append(raw + b"\x00" * pad)
+        views.append({"buffer": 0, "byteOffset": offset, "byteLength": len(raw)})
+        offset += len(raw) + pad
+        acc = {"bufferView": len(views) - 1, "componentType": comp,
+               "count": int(len(data)), "type": type_}
+        if type_ == "VEC3" and comp == 5126:
+            acc["min"] = np.asarray(data).min(axis=0).tolist()
+            acc["max"] = np.asarray(data).max(axis=0).tolist()
+        accessors.append(acc)
+        return len(accessors) - 1
+
+    positions = add(np.asarray(cloud.positions, np.float32), "VEC3", 5126)
+    # Colour and opacity travel together as RGBA, which is how the extension
+    # expects a splat's base appearance.
+    rgba = np.empty((n, 4), dtype=np.float32)
+    rgba[:, :3] = np.clip(cloud.colors, 0.0, 1.0)
+    rgba[:, 3] = np.clip(cloud.alphas, 0.0, 1.0)
+    colors = add(rgba, "VEC4", 5126)
+    scales = add(np.exp(np.asarray(cloud.scales, np.float64)).astype(np.float32),
+                 "VEC3", 5126)
+    rotations = add(np.asarray(cloud.rotations, np.float32), "VEC4", 5126)
+
+    splat_ext: dict[str, Any] = {
+        "positions": positions,
+        "colors": colors,
+        "scales": scales,
+        "rotations": rotations,
+    }
+    if cloud.sh is not None and cloud.sh.size:
+        splat_ext["sphericalHarmonicsDegree"] = cloud.sh_degree
+        splat_ext["sphericalHarmonics"] = add(
+            np.asarray(cloud.sh, np.float32), "SCALAR", 5126
+        )
+
+    gltf = {
+        "asset": {
+            "version": "2.0",
+            "generator": "recon",
+            "extras": {
+                "coordinate_frame": json.loads(CANONICAL_FRAME.model_dump_json()),
+                "target_frame": json.loads(GLTF_FRAME.model_dump_json()),
+                "gaussian_count": n,
+                **(extras or {}),
+            },
+        },
+        "extensionsUsed": [KHR_GAUSSIAN_SPLATTING],
+        "extensionsRequired": [KHR_GAUSSIAN_SPLATTING],
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": name}],
+        "meshes": [{
+            "name": name,
+            "primitives": [{
+                "attributes": {"POSITION": positions},
+                "mode": 0,  # POINTS
+                "extensions": {KHR_GAUSSIAN_SPLATTING: splat_ext},
+            }],
+        }],
+        "bufferViews": views,
+        "accessors": accessors,
+        "buffers": [{"byteLength": offset}],
+    }
+
+    bin_blob = b"".join(buffers)
+    json_blob = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    json_blob += b" " * ((-len(json_blob)) % 4)
+    total = 12 + 8 + len(json_blob) + 8 + len(bin_blob)
+    with path.open("wb") as fh:
+        fh.write(struct.pack("<III", 0x46546C67, 2, total))
+        fh.write(struct.pack("<II", len(json_blob), 0x4E4F534A))
+        fh.write(json_blob)
+        fh.write(struct.pack("<II", len(bin_blob), 0x004E4942))
+        fh.write(bin_blob)
+    return path
 
 
 # ---------------------------------------------------------------------------

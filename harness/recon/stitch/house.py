@@ -15,7 +15,7 @@ import numpy as np
 
 from recon import geom
 from recon.io.bundle import BundleDir
-from recon.layout.doorways import extract_doorways
+from recon.layout.doorways import doorway_frame, extract_doorways
 from recon.pipeline import Pipeline, PipelineResult
 from recon.schemas import Doorway, EdgeSource, HouseGraph, RoomLayout
 from recon.stitch.align import Alignment, align_doorways, match_doorways
@@ -24,6 +24,10 @@ from recon.stitch.posegraph import HousePoseGraph, PoseGraphResult
 #: Two rooms joined at a doorway sit side by side; they must not occupy the same
 #: floor. Above this overlap fraction the pairing is wrong, whatever ICP says.
 MAX_FOOTPRINT_OVERLAP = 0.15
+#: A loop-closure candidate's two doorways must already land this close together
+#: in the current solution. Generous, because the drift the closure is meant to
+#: correct is exactly what pushes them apart.
+LOOP_CLOSURE_SEARCH_M = 0.60
 
 
 @dataclass
@@ -101,6 +105,7 @@ def stitch(
     property_id: str = "property",
     pairing: dict[tuple[str, str], tuple[str, str]] | None = None,
     solve_scale: bool = True,
+    find_loops: bool = True,
 ) -> HouseResult:
     """Join reconstructed rooms into one house.
 
@@ -193,6 +198,20 @@ def stitch(
         )
 
     pose = graph.optimise()
+
+    if find_loops:
+        closures = find_loop_closures(rooms, pose, graph, up)
+        if closures:
+            for a_id, b_id, dw_a, dw_b, al in closures:
+                alignments.append((a_id, b_id, dw_a, dw_b, al))
+                graph.add_edge(
+                    al.to_edge(a_id, b_id, dw_a, dw_b, EdgeSource.AUTO_REGISTERED)
+                )
+            # Re-solve with the extra constraints. Plan §6.3 lists loop closures
+            # as a graph input precisely because an over-determined graph is what
+            # lets accumulated drift be pulled back rather than merely carried.
+            pose = graph.optimise()
+
     disconnected = _disconnected_rooms(graph)
     for rid in disconnected:
         rejected.append((rid, "", "room has no accepted doorway edge; its placement is arbitrary"))
@@ -249,6 +268,85 @@ def _better(a: Alignment, b: Alignment) -> bool:
     if not np.isfinite(b.rmse_m):
         return True
     return a.rmse_m < b.rmse_m
+
+
+def find_loop_closures(
+    rooms: dict[str, RoomReconstruction],
+    pose: PoseGraphResult,
+    graph: HousePoseGraph,
+    up: np.ndarray,
+    *,
+    search_m: float = LOOP_CLOSURE_SEARCH_M,
+) -> list[tuple[str, str, str, str, Alignment]]:
+    """Find doorways that join two rooms the user did not tag as connected.
+
+    Plan §6.3 lists loop closures among the graph's inputs — "any room pair with
+    overlapping geometry" — but nothing was producing them, so the graph was
+    always a tree and every doorway was load-bearing. In a house with a loop the
+    closing edge is redundant information, and redundancy is the only thing that
+    lets accumulated drift be pulled back rather than merely carried to the end.
+
+    The search is cheap because the current solution already places every room
+    roughly: a genuine closure has two *unused* doorways that land near each
+    other with opposed normals. Each candidate still goes through the full ICP
+    and its acceptance gates, so a coincidence of position is not enough.
+    """
+    used: set[str] = set()
+    connected: set[tuple[str, str]] = set()
+    for e in graph.edges:
+        used.update(e.via_doorway)
+        connected.add((e.from_room, e.to_room))
+        connected.add((e.to_room, e.from_room))
+
+    up = np.asarray(up, dtype=np.float64)
+    up = up / np.linalg.norm(up)
+
+    # Every unused doorway, placed in the house frame.
+    placed: list[tuple[str, Doorway, np.ndarray, np.ndarray]] = []
+    for rid, room in rooms.items():
+        for dw in room.doorways:
+            if dw.id in used:
+                continue
+            c, n, _ = doorway_frame(dw, up)
+            centre = pose.apply(rid, c[None, :])[0]
+            # Rotate the normal by the room's yaw; scale does not affect it.
+            yaw = pose.nodes[rid].yaw_rad
+            cs, sn = np.cos(yaw), np.sin(yaw)
+            rot = np.array([[cs, 0.0, sn], [0.0, 1.0, 0.0], [-sn, 0.0, cs]])
+            placed.append((rid, dw, centre, rot @ n))
+
+    out: list[tuple[str, str, str, str, Alignment]] = []
+    taken: set[str] = set()
+    candidates = []
+    for i in range(len(placed)):
+        for j in range(i + 1, len(placed)):
+            rid_a, dw_a, c_a, n_a = placed[i]
+            rid_b, dw_b, c_b, n_b = placed[j]
+            if rid_a == rid_b or (rid_a, rid_b) in connected:
+                continue
+            gap = float(np.linalg.norm(c_a - c_b))
+            if gap > search_m:
+                continue
+            # Opposed normals: the two rooms see the same door from either side.
+            if float(n_a @ n_b) > -0.5:
+                continue
+            candidates.append((gap, rid_a, dw_a, rid_b, dw_b))
+
+    for _gap, rid_a, dw_a, rid_b, dw_b in sorted(candidates, key=lambda t: t[0]):
+        if dw_a.id in taken or dw_b.id in taken:
+            continue
+        a, b = rooms[rid_a], rooms[rid_b]
+        al = align_doorways(
+            dw_a, dw_b, up,
+            points_a=a.points, points_b=b.points, normals_a=a.normals,
+        )
+        if not al.accepted or not al.verified:
+            continue
+        if footprint_overlap(a.layout, b.layout, al, up) > MAX_FOOTPRINT_OVERLAP:
+            continue
+        taken.update({dw_a.id, dw_b.id})
+        out.append((rid_a, rid_b, dw_a.id, dw_b.id, al))
+    return out
 
 
 def _disconnected_rooms(graph: HousePoseGraph) -> list[str]:

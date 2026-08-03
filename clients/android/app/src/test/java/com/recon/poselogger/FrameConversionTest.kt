@@ -116,7 +116,12 @@ class FrameConversionTest {
         )
         val wire = convert(columnMajor(r, doubleArrayOf(0.0, 0.0, 0.0)))
         val forward = listOf(-wire.R[0][2], -wire.R[1][2], -wire.R[2][2])
-        assertEquals(listOf(0.0, 0.0, -1.0), forward)
+        // Element-wise with a delta, not list equality: negating a zero yields
+        // -0.0, and Double.equals treats -0.0 and 0.0 as different values.
+        val expected = listOf(0.0, 0.0, -1.0)
+        for (i in expected.indices) {
+            assertEquals("component $i of $forward", expected[i], forward[i], 1e-12)
+        }
     }
 
     @Test

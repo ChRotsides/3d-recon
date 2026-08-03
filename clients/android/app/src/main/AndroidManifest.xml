@@ -5,7 +5,7 @@
     <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
 
     <application
-        android:label="Pose Logger"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 

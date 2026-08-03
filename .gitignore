@@ -33,3 +33,9 @@ clients/android/.gradle/
 clients/android/app/build/
 *.xcuserstate
 local.properties
+
+# Android build products (the wrapper itself IS committed, deliberately)
+clients/android/.gradle/
+clients/android/app/build/
+clients/android/build/
+clients/android/local.properties

@@ -131,8 +131,13 @@ class Pipeline:
 
         # 6. Layout.
         t = time.time()
+        # Camera positions pick this room out of everything visible through its
+        # doorways (see FloorplanConfig.door_sever_radius_m). They are in the
+        # corrected metric frame, so they must carry the same scale as fusion.
+        cams = np.array([kf.pose.position for kf in bundle.bundle.keyframes]) * s
         layout = build_layout(
-            planes, bundle.bundle.room_id, bundle.bundle.up, cfg.floorplan, scale_applied=s
+            planes, bundle.bundle.room_id, bundle.bundle.up, cfg.floorplan,
+            scale_applied=s, camera_positions=cams,
         )
         timings["layout"] = time.time() - t
 

@@ -35,6 +35,17 @@ class FloorplanConfig:
     grid_m: float = 0.05
     #: Morphological closing radius, in cells, to bridge gaps under furniture.
     close_cells: int = 3
+    #: Radius of the opening used to sever doorway necks, in metres.
+    #:
+    #: A capture sees straight through an open doorway into the next room, so
+    #: the observed floor is not one room but a chain of them joined by
+    #: door-width necks. Taking the largest connected component then returns
+    #: *the whole house* as one footprint. A morphological opening with a radius
+    #: above half a door width cuts every neck narrower than a door while
+    #: leaving room-sized areas intact; the component containing the camera
+    #: track is then this room. Corner rounding from the opening does not reach
+    #: the output, because edges are snapped back to fitted wall planes.
+    door_sever_radius_m: float = 0.45
     #: Douglas-Peucker tolerance.
     simplify_m: float = 0.08
     #: An edge snaps to a wall line within this angle and distance.
@@ -46,8 +57,19 @@ class FloorplanConfig:
     opening_bin_m: float = 0.05
     opening_min_width_m: float = 0.40
     opening_min_height_m: float = 0.40
-    #: A hole whose bottom is below this is a door, above it a window.
+    #: A hole whose bottom is below this is door-shaped, above it window-shaped.
     door_sill_max_m: float = 0.30
+    #: Minimum plausible heights per class. Without these, the gap left where a
+    #: grazing view missed the wall-floor junction reads as a door: it starts at
+    #: the floor, it is a metre wide, and it is surrounded by wall. The only
+    #: thing separating it from a real doorway is that it is 50 cm tall.
+    #: Interior doors cluster near 2.03 m (PLAN.md §6.2), so 1.5 m is a generous
+    #: floor that still rejects every data gap seen so far.
+    door_min_height_m: float = 1.50
+    window_min_height_m: float = 0.40
+    #: A door must reach close to the floor; a gap starting 40 cm up that is
+    #: door-height is more likely two stacked data gaps than a doorway.
+    door_max_sill_m: float = 0.30
 
 
 def build_layout(
@@ -57,6 +79,7 @@ def build_layout(
     config: FloorplanConfig | None = None,
     *,
     scale_applied: float = 1.0,
+    camera_positions: np.ndarray | None = None,
 ) -> RoomLayout:
     cfg = config or FloorplanConfig()
     up = np.asarray(up, dtype=np.float64)
@@ -64,7 +87,11 @@ def build_layout(
     e0, e1 = _basis(up)
 
     pts2d = _floor_footprint_points(planes, up, e0, e1)
-    poly = _extract_polygon(pts2d, planes, up, e0, e1, cfg)
+    cams2d = None
+    if camera_positions is not None and len(camera_positions):
+        c = np.asarray(camera_positions, dtype=np.float64)
+        cams2d = np.column_stack([c @ e0, c @ e1])
+    poly = _extract_polygon(pts2d, planes, up, e0, e1, cfg, cams2d)
 
     floor_h = planes.floor_height if planes.floor else 0.0
     ceil_h = planes.ceiling_height if planes.ceiling else 0.0
@@ -112,6 +139,7 @@ def _extract_polygon(
     e0: np.ndarray,
     e1: np.ndarray,
     cfg: FloorplanConfig,
+    cams2d: np.ndarray | None = None,
 ) -> np.ndarray:
     if len(pts2d) < 10:
         return np.zeros((0, 2))
@@ -126,6 +154,7 @@ def _extract_polygon(
     occ[ij[:, 0], ij[:, 1]] = True
 
     occ = _close_and_fill(occ, cfg.close_cells)
+    occ = _select_room(occ, lo, cfg, cams2d)
     contour = _largest_contour(occ)
     if contour is None or len(contour) < 4:
         return np.zeros((0, 2))
@@ -139,17 +168,82 @@ def _extract_polygon(
 
 
 def _close_and_fill(occ: np.ndarray, radius: int) -> np.ndarray:
+    """Bridge gaps under furniture and fill interior holes."""
     from scipy import ndimage
 
     if radius > 0:
         st = np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
         occ = ndimage.binary_closing(occ, structure=st, border_value=0)
-    filled = ndimage.binary_fill_holes(occ)
-    lab, n = ndimage.label(filled)
-    if n == 0:
-        return filled
-    sizes = ndimage.sum(filled, lab, index=range(1, n + 1))
-    return lab == (int(np.argmax(sizes)) + 1)
+    return ndimage.binary_fill_holes(occ)
+
+
+def _disk(radius_cells: int) -> np.ndarray:
+    r = max(int(radius_cells), 1)
+    y, x = np.ogrid[-r:r + 1, -r:r + 1]
+    return (x * x + y * y) <= r * r
+
+
+def _select_room(
+    occ: np.ndarray, lo: np.ndarray, cfg: FloorplanConfig, cams2d: np.ndarray | None
+) -> np.ndarray:
+    """Isolate *this* room from everything visible through its doorways.
+
+    See `FloorplanConfig.door_sever_radius_m`. Three properties matter:
+
+    * **Do nothing when there is nothing to do.** If the opening does not split
+      the region, this room is not looking into another one, and the original
+      occupancy is returned untouched. A morphological opening rounds corners,
+      and a rounded corner survives Douglas-Peucker as two extra vertices — so
+      applying it unconditionally damages every ordinary single-room capture to
+      solve a problem it does not have.
+    * **Pick by where the camera was**, not by area: the room next door may well
+      be the bigger one, and "largest blob" would then return the neighbour.
+    * **Restore the corners.** The eroded core is grown back against the
+      original occupancy, with the other cores' territory blocked off — the
+      room regains its true square corners without re-annexing the neighbour
+      through the doorway it was just cut from.
+    """
+    from scipy import ndimage
+
+    r_cells = max(int(round(cfg.door_sever_radius_m / cfg.grid_m)), 1)
+    disk = _disk(r_cells)
+    severed = ndimage.binary_opening(occ, structure=disk, border_value=0)
+    if not severed.any():
+        return occ  # the opening ate everything; better to keep the raw region
+
+    lab, n = ndimage.label(severed)
+    if n <= 1:
+        return occ  # no doorway leak to cut
+
+    chosen = None
+    if cams2d is not None and len(cams2d):
+        ij = np.floor((cams2d - lo) / cfg.grid_m).astype(int)
+        inside = (
+            (ij[:, 0] >= 0) & (ij[:, 0] < occ.shape[0])
+            & (ij[:, 1] >= 0) & (ij[:, 1] < occ.shape[1])
+        )
+        if inside.any():
+            hits = lab[ij[inside, 0], ij[inside, 1]]
+            hits = hits[hits > 0]
+            if len(hits):
+                chosen = int(np.bincount(hits).argmax())
+    if chosen is None:
+        sizes = ndimage.sum(severed, lab, index=range(1, n + 1))
+        chosen = int(np.argmax(sizes)) + 1
+
+    core = lab == chosen
+    rivals = severed & ~core
+    blocked = ndimage.binary_dilation(rivals, structure=disk)
+    room = occ & ndimage.binary_dilation(core, structure=disk) & ~blocked
+
+    # Keep only the part still attached to the core.
+    lab2, n2 = ndimage.label(room)
+    if n2 == 0:
+        return core
+    keep = np.bincount(lab2[core & (lab2 > 0)])
+    if len(keep) <= 1:
+        return core
+    return lab2 == int(np.argmax(keep[1:])) + 1
 
 
 def _largest_contour(occ: np.ndarray) -> np.ndarray | None:
@@ -370,9 +464,12 @@ def detect_openings(
             if width < cfg.opening_min_width_m or height < cfg.opening_min_height_m:
                 continue
             sill = r0 * cfg.opening_bin_m
+            kind = _classify_opening(sill, height, cfg)
+            if kind is None:
+                continue
             out.append(
                 Opening(
-                    kind="door" if sill <= cfg.door_sill_max_m else "window",
+                    kind=kind,
                     wall_index=wi,
                     u_start_m=float(u0 + c0 * cfg.opening_bin_m),
                     u_end_m=float(u0 + (c1 + 1) * cfg.opening_bin_m),
@@ -381,6 +478,20 @@ def detect_openings(
                 )
             )
     return out
+
+
+def _classify_opening(sill: float, height: float, cfg: FloorplanConfig) -> str | None:
+    """Door, window, or neither.
+
+    Returning `None` is the important case: a hole in the observed wall is only
+    an opening if its dimensions are physically plausible for one. Everything
+    else is missing data, and calling it a doorway is worse than missing a real
+    one — the house graph joins rooms *at doorways* (PLAN.md §6.3), so a
+    phantom door is a phantom join.
+    """
+    if sill <= cfg.door_max_sill_m:
+        return "door" if height >= cfg.door_min_height_m else None
+    return "window" if height >= cfg.window_min_height_m else None
 
 
 def _inliers_for_edge(

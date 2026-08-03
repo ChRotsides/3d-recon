@@ -514,8 +514,17 @@ def generate(
     write_depth: bool = True,
     write_masks: bool = True,
     room_id: str | None = None,
+    scene_mesh: TriMesh | None = None,
+    world_from_room: np.ndarray | None = None,
 ) -> tuple[SessionBundle, GroundTruth]:
-    """Render a full capture session to `out_dir` and return bundle + ground truth."""
+    """Render a full capture session to `out_dir` and return bundle + ground truth.
+
+    `scene_mesh` and `world_from_room` let a room be captured inside a larger
+    scene: stations are still planned in the room's own footprint and the bundle
+    still records **room-local** poses, but rays are cast against the whole
+    house. That is what lets a scan see through a doorway into the next room,
+    which is the overlap the §6.3 ICP refinement needs to exist at all.
+    """
     from PIL import Image
 
     cfg = cfg or CaptureConfig()
@@ -527,11 +536,16 @@ def generate(
     if write_masks:
         (out_dir / "masks").mkdir(exist_ok=True)
 
-    mesh = build_mesh(spec)
+    room_mesh = build_mesh(spec)
+    mesh = scene_mesh if scene_mesh is not None else room_mesh
+    w_from_r = np.eye(4) if world_from_room is None else np.asarray(world_from_room, np.float64)
     intr = intrinsics_for(cfg)
     K = intr.matrix()
     poly = spec.polygon
-    light = np.array([poly[:, 0].mean(), spec.ceiling_height_m - 0.15, poly[:, 1].mean()])
+    light_local = np.array(
+        [poly[:, 0].mean(), spec.ceiling_height_m - 0.15, poly[:, 1].mean()]
+    )
+    light = w_from_r[:3, :3] @ light_local + w_from_r[:3, 3]
 
     stations = plan_stations(spec, cfg.n_stations)
     yaws = np.radians(np.arange(0.0, 360.0, cfg.yaw_step_deg))
@@ -557,8 +571,13 @@ def generate(
                 pos_true = np.array([st[0], STANDING_EYE_HEIGHT_M, st[1]])
                 R_true = _rotation(float(yaw), float(pitch))
 
+                # Render in the scene frame, but keep the bundle room-local:
+                # an independently scanned room has no idea where the house is.
+                pos_world = w_from_r[:3, :3] @ pos_true + w_from_r[:3, 3]
+                R_world = w_from_r[:3, :3] @ R_true
+
                 rgb, depth, labels = render(
-                    mesh, K, R_true, pos_true, cfg.width, cfg.height, light,
+                    mesh, K, R_world, pos_world, cfg.width, cfg.height, light,
                     texture_strength=cfg.texture_strength,
                     simulate_artifacts=cfg.simulate_artifacts,
                 )
@@ -651,7 +670,8 @@ def generate(
 
     (out_dir / "bundle.json").write_text(bundle.model_dump_json(indent=2))
     (out_dir / "ground_truth.json").write_text(gt.to_json())
-    _write_ply(out_dir / "mesh_gt.ply", mesh)
+    # The room's *own* mesh, not the whole scene: Chamfer must score this room.
+    _write_ply(out_dir / "mesh_gt.ply", room_mesh)
     return bundle, gt
 
 

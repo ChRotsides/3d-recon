@@ -163,11 +163,27 @@ def corridor_house(n_rooms: int = 6, seed: int = 0) -> HouseSpec:
 
 
 def build_house_mesh(house: HouseSpec) -> geom.TriMesh:
-    """Every room's mesh, placed in the shared house frame."""
+    """Every room's mesh, placed in the shared house frame, plus one exterior.
+
+    The exterior is built once around the whole property. Letting each room
+    bring its own would place a slab 4 m beyond that room's bbox — i.e. inside
+    the rooms next to it — and every scan of a neighbour would then measure the
+    intruding slab rather than its own wall.
+    """
     parts = []
+    corners = []
+    wants_exterior = False
     for p in house.rooms:
-        m = synth.build_mesh(p.spec)
+        room = _without_exterior(p.spec)
+        wants_exterior = wants_exterior or (
+            p.spec.exterior and any(o.kind == "window" for o in p.spec.openings)
+        )
+        m = synth.build_mesh(room)
         w = p.matrix()
+        pts = p.spec.polygon
+        pts3 = np.column_stack([pts[:, 0], np.zeros(len(pts)), pts[:, 1]])
+        moved = pts3 @ w[:3, :3].T + w[:3, 3]
+        corners.append(np.column_stack([moved[:, 0], moved[:, 2]]))
         parts.append(
             geom.TriMesh(
                 vertices=m.vertices @ w[:3, :3].T + w[:3, 3],
@@ -177,7 +193,20 @@ def build_house_mesh(house: HouseSpec) -> geom.TriMesh:
                 face_colors=m.face_colors,
             )
         )
+
+    if wants_exterior and corners:
+        allc = np.vstack(corners)
+        ceiling = max(p.spec.ceiling_height_m for p in house.rooms)
+        parts.append(synth.exterior_box(allc.min(axis=0), allc.max(axis=0), ceiling))
     return geom.TriMesh.concat(parts)
+
+
+def _without_exterior(spec: synth.RoomSpec) -> synth.RoomSpec:
+    return synth.RoomSpec(
+        name=spec.name, footprint=list(spec.footprint),
+        ceiling_height_m=spec.ceiling_height_m, openings=list(spec.openings),
+        panels=list(spec.panels), boxes=list(spec.boxes), exterior=False,
+    )
 
 
 @dataclass

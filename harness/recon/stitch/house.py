@@ -13,12 +13,17 @@ from pathlib import Path
 
 import numpy as np
 
+from recon import geom
 from recon.io.bundle import BundleDir
 from recon.layout.doorways import extract_doorways
 from recon.pipeline import Pipeline, PipelineResult
 from recon.schemas import Doorway, EdgeSource, HouseGraph, RoomLayout
 from recon.stitch.align import Alignment, align_doorways, match_doorways
 from recon.stitch.posegraph import HousePoseGraph, PoseGraphResult
+
+#: Two rooms joined at a doorway sit side by side; they must not occupy the same
+#: floor. Above this overlap fraction the pairing is wrong, whatever ICP says.
+MAX_FOOTPRINT_OVERLAP = 0.15
 
 
 @dataclass
@@ -115,6 +120,12 @@ def stitch(
 
     alignments: list[tuple[str, str, str, str, Alignment]] = []
     rejected: list[tuple[str, str, str]] = []
+    # A doorway joins exactly two rooms. Without this, a corridor of
+    # same-sized doors lets one doorway be consumed twice — room B gets attached
+    # through the door it already reached room A by, which places it on the
+    # wrong side as a clean half-turn that neither ICP nor an overlap test
+    # objects to, because the result does not intersect anything.
+    used_doorways: set[str] = set()
 
     for a_id, b_id in connections:
         a, b = rooms[a_id], rooms[b_id]
@@ -135,26 +146,56 @@ def stitch(
 
         best: Alignment | None = None
         best_ids: tuple[str, str] | None = None
-        for ia, ib, _ in candidates[:4]:
+        overlap_note = ""
+        for ia, ib, _ in candidates[:6]:
+            if (a.doorways[ia].id in used_doorways
+                    or b.doorways[ib].id in used_doorways):
+                continue
             al = align_doorways(
                 a.doorways[ia], b.doorways[ib], up,
                 points_a=a.points, points_b=b.points, normals_a=a.normals,
             )
-            if best is None or (al.accepted and not best.accepted) or (
-                al.accepted == best.accepted and _better(al, best)
-            ):
+            # ICP alone cannot tell a doorway from the one at the other end of a
+            # corridor: both give a plausible local fit, and the wrong one comes
+            # out as a half-turn that stacks the two rooms on the same floor.
+            # Interpenetration is the decisive check, and it is nearly free.
+            ov = footprint_overlap(a.layout, b.layout, al, up)
+            if ov > MAX_FOOTPRINT_OVERLAP:
+                overlap_note = (
+                    f"best doorway pairing put {ov*100:.0f}% of {b_id} inside {a_id}"
+                )
+                continue
+            # A verified fit always beats an unverified one, whatever its RMSE:
+            # an unverified edge never had the §6.3 gate applied to it at all.
+            better = (
+                best is None
+                or (al.accepted, al.verified) > (best.accepted, best.verified)
+                or ((al.accepted, al.verified) == (best.accepted, best.verified)
+                    and _better(al, best))
+            )
+            if better:
                 best, best_ids = al, (a.doorways[ia].id, b.doorways[ib].id)
 
-        if best is None or not best.accepted:
-            rejected.append((a_id, b_id, best.reason if best else "no alignment"))
+        if best is None:
+            rejected.append((
+                a_id, b_id,
+                overlap_note or "no unused doorway pairing survived the checks",
+            ))
+            continue
+        if not best.accepted:
+            rejected.append((a_id, b_id, best.reason))
             continue
 
+        used_doorways.update(best_ids)
         alignments.append((a_id, b_id, best_ids[0], best_ids[1], best))
         graph.add_edge(
             best.to_edge(a_id, b_id, best_ids[0], best_ids[1], EdgeSource.USER_TAGGED)
         )
 
     pose = graph.optimise()
+    disconnected = _disconnected_rooms(graph)
+    for rid in disconnected:
+        rejected.append((rid, "", "room has no accepted doorway edge; its placement is arbitrary"))
     return HouseResult(
         graph=graph.to_house_graph(property_id),
         pose=pose,
@@ -164,6 +205,43 @@ def stitch(
     )
 
 
+def footprint_overlap(
+    layout_a, layout_b, alignment: Alignment, up: np.ndarray
+) -> float:
+    """Fraction of room B's footprint that lands inside room A's, once aligned.
+
+    Two rooms joined by a doorway share a wall, not a floor. Anything much above
+    zero means the pairing is wrong — most often a half-turn that folds one room
+    back over the other, which looks entirely reasonable in the ICP residual.
+    """
+    pa = np.asarray(layout_a.footprint, dtype=np.float64)
+    pb = np.asarray(layout_b.footprint, dtype=np.float64)
+    if len(pa) < 3 or len(pb) < 3:
+        return 0.0
+
+    c, s = np.cos(alignment.yaw_rad), np.sin(alignment.yaw_rad)
+    # SE2Transform rotates about +Y as [[c,0,s],[0,1,0],[-s,0,c]]; in (x, z) that
+    # is [[c, s], [-s, c]].
+    moved = np.column_stack([
+        c * pb[:, 0] + s * pb[:, 1] + alignment.tx,
+        -s * pb[:, 0] + c * pb[:, 1] + alignment.tz,
+    ])
+
+    # Sample B's interior and ask how much of it is inside A. Sampling beats an
+    # exact polygon clip here: both footprints are small and possibly non-convex,
+    # and a fraction is all the decision needs.
+    lo, hi = moved.min(axis=0), moved.max(axis=0)
+    n = 40
+    gx = np.linspace(lo[0], hi[0], n)
+    gz = np.linspace(lo[1], hi[1], n)
+    grid = np.stack(np.meshgrid(gx, gz), axis=-1).reshape(-1, 2)
+    in_b = geom.point_in_polygon(grid, moved)
+    if not in_b.any():
+        return 0.0
+    in_a = geom.point_in_polygon(grid[in_b], geom.ensure_ccw(pa))
+    return float(in_a.mean())
+
+
 def _better(a: Alignment, b: Alignment) -> bool:
     """Lower ICP RMSE wins; an unrefined match (NaN RMSE) never beats a refined one."""
     if not np.isfinite(a.rmse_m):
@@ -171,6 +249,31 @@ def _better(a: Alignment, b: Alignment) -> bool:
     if not np.isfinite(b.rmse_m):
         return True
     return a.rmse_m < b.rmse_m
+
+
+def _disconnected_rooms(graph: HousePoseGraph) -> list[str]:
+    """Rooms with no path to the rest of the house.
+
+    Their pose is unconstrained, so the optimiser will leave them wherever the
+    initial guess put them. Reporting that is essential: a silently floating
+    room looks like drift, and someone will spend a day tuning the solver for
+    what is really a missing doorway tag.
+    """
+    if not graph.nodes:
+        return []
+    adj: dict[str, set[str]] = {r: set() for r in graph.nodes}
+    for e in graph.edges:
+        adj[e.from_room].add(e.to_room)
+        adj[e.to_room].add(e.from_room)
+    root = next(iter(graph.nodes))
+    seen = {root}
+    stack = [root]
+    while stack:
+        for nxt in adj[stack.pop()]:
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return sorted(set(graph.nodes) - seen)
 
 
 def house_footprints(result: HouseResult) -> dict[str, np.ndarray]:

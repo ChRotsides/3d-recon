@@ -4,7 +4,7 @@ Companion to [`room-scanner-implementation-plan.md`](../room-scanner-implementat
 which stays the canonical architecture. This file records what has been built,
 what deviates from the plan and why, and what is blocked.
 
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-04
 
 ---
 
@@ -144,12 +144,16 @@ Found while building; all verified. See [`licensing-audit.md`](licensing-audit.m
 | Eval metrics + benchmark grid (§8) | done | 5 scenes × 2 maskers |
 | Bundle validator | done | 5 tests |
 | Rust guidance core (§6.1) | done | 20 tests |
+| Room stitching solver (§6.3) | done | 29 tests |
+| Room isolation in a connected house | done | ±0.1% area |
+| Integrated stitch -> drift target | **open** | see §7b |
+| Android pose logger | **builds** | APK + 6 JVM tests |
 | DA3 / MapAnything / SAM 3 adapters | written | ❌ needs GPU |
 | PGSR clean-room trainer | **not written** | see §6 |
-| iOS + Android pose loggers | done | needs device build |
+| iOS pose logger | source only | ❌ needs a Mac |
 | Licensing audit | done | re-runnable |
 | Cloud service (Phase 2) | not started | |
-| Room stitching (Phase 5) | not started | |
+
 
 ---
 
@@ -196,6 +200,69 @@ This says the geometry pipeline is sound and that mask-before-fusion is
 load-bearing exactly as plan §7 claims. It says **nothing yet** about whether
 DA3 depth or SAM 3 masks are good enough on real rooms — that is what the GPU
 box is for.
+
+---
+
+## 7a. Room isolation: what a room sees through its own doorways
+
+A capture sees straight through an open doorway into the next room, and a
+**denser capture leaks more, not less** — better coverage means seeing further
+in. Before this was handled, reconstructing a room in a connected house gave
++42% area and 30 walls in a 4-wall room.
+
+Two approaches were tried. Severing the doorway "neck" with a morphological
+opening does not work: adjoining rooms usually have collinear side walls, so
+the two regions meet along a wide front rather than a neck, and the opening
+never splits them. What does work is using the **walls themselves** as the
+barrier — every fitted wall is rasterised across its full extent (including
+across its own doorway, because the room *ends* at the doorway), the barrier is
+subtracted from the occupied floor, and the result is flood-filled from where
+the camera actually stood.
+
+| | before | after |
+|---|---|---|
+| room_0 area error | +42.3% | +0.10% |
+| room_1 area error | +26.6% | +0.01% |
+| room_2 area error | +28.0% | −0.07% |
+| walls found | 18–30 | 4/4 |
+| doors found | 0 | all |
+
+Guarded by `test_a_room_is_not_contaminated_by_what_it_sees_through_its_doorways`.
+
+A separate bug in the synthetic house generator was masking this: exterior
+geometry was built per room, 4 m beyond *that* room's bbox, which places it
+inside the neighbouring rooms. Room 0 was measuring room 1's exterior slab
+standing in the middle of its own floor. Now built once around the whole
+property, guarded by `test_house_exterior_does_not_intrude_into_other_rooms`.
+
+## 7b. Open issue: end-to-end stitching does not yet meet the drift target
+
+The stitching **solver** is correct and tested (29 tests: yaw convention,
+closed-form alignment, ICP, pose graph, loop closure, outlier robustness, and
+≤15 cm drift across a six-room house using analytic doorways). The **integrated**
+path — reconstruct real rooms, detect their doorways, align, solve — does not
+yet reach the target. Two findings, both measured rather than guessed:
+
+1. **The §6.3 5 cm ICP gate has no margin for residual scale.** Evaluating the
+   point-to-plane RMSE at the *ground-truth* transform between two adjacent
+   reconstructed rooms gives **5.71 cm** — already a fail, on a perfect
+   alignment. The rooms differ by ~0.9% residual scale after the §6.2 per-room
+   solve, and a rigid ICP has to absorb that as position error. Adding scale as
+   a fourth ICP DoF was tried and only moved 6.0 → 5.6 cm, so scale is not the
+   dominant term; it was reverted rather than kept as unpaid-for complexity.
+   The residual needs proper attribution before the gate can be trusted or
+   changed — moving the threshold without knowing what it is measuring would
+   just be tuning until green.
+
+2. **Doorway pairing in a corridor of identical doors is under-determined.**
+   Fixed so far: a doorway may join exactly one pair of rooms (reusing one
+   produced a clean 180° flip that no ICP or overlap test objected to), rooms
+   may not interpenetrate, unverified alignments are flagged rather than
+   silently treated as having passed the gate, and rooms left disconnected are
+   reported instead of floating wherever the initial guess put them. The plan's
+   own answer — the user taps the same doorway in both rooms (§6.3 path B step
+   1) — is supported via `stitch(pairing=...)` and sidesteps this entirely; the
+   automatic path is the one still short.
 
 ---
 

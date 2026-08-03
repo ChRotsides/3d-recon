@@ -458,3 +458,72 @@ def test_six_room_house_drift_is_within_target():
         got = res.apply(p.room_id, np.zeros((1, 3)))[0]
         assert abs(got[0] - p.tx) < 0.15, f"{p.room_id} at x={got[0]:.2f}, true {p.tx:.2f}"
         assert abs(got[2] - p.tz) < 0.15, f"{p.room_id} at z={got[2]:.2f}, true {p.tz:.2f}"
+
+
+# -- room isolation ---------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_room_is_not_contaminated_by_what_it_sees_through_its_doorways(tmp_path):
+    """A capture sees straight through an open doorway into the next room, and a
+    *denser* capture leaks more, not less — before the wall-barrier flood fill
+    this inflated room area by 42% and reported 30 walls in a 4-wall room.
+
+    This is the regression guard for that: reconstruct a room that is joined to
+    two others and check it comes back as itself.
+    """
+    from recon import synth, synth_house
+    from recon.io.bundle import BundleDir
+    from recon.masking.base import GroundTruthMasker
+    from recon.pipeline import Pipeline
+
+    house = synth_house.corridor_house(n_rooms=3, seed=1)
+    cfg = synth.CaptureConfig(width=140, height=105, n_stations=3, yaw_step_deg=30,
+                              max_keyframes=60)
+    gt = synth_house.generate_house(house, tmp_path, cfg)
+
+    # room_1 is the interior room: doorways on both sides, so it can leak both ways.
+    bd = BundleDir.load(tmp_path / "room_1")
+    res = Pipeline(masker=GroundTruthMasker()).run(bd)
+    truth = bd.ground_truth()
+
+    assert len(res.layout.wall_lengths_m) == 4, (
+        f"expected 4 walls, got {len(res.layout.wall_lengths_m)} — the neighbouring "
+        "rooms leaked into the footprint"
+    )
+    err = res.layout.area_m2 / truth["area_m2"] - 1.0
+    assert abs(err) < 0.03, f"area error {err*100:+.1f}% (plan §1.3 target is 3%)"
+    doors = [o for o in res.layout.openings if o.kind == "door"]
+    assert len(doors) == 2, f"expected both doorways, got {len(doors)}"
+    assert gt.rooms[1]["room_id"] == "room_1"
+
+
+@pytest.mark.slow
+def test_house_exterior_does_not_intrude_into_other_rooms(tmp_path):
+    """Guard on the synthetic generator itself.
+
+    Exterior geometry used to be built per room, 4 m beyond that room's bbox —
+    which lands inside its neighbours. Room 0 then measured room 1's exterior
+    slab standing in the middle of its own floor, and no amount of pipeline
+    work would have fixed that.
+    """
+    import numpy as np
+
+    from recon import geom, synth, synth_house
+
+    house = synth_house.corridor_house(n_rooms=3, seed=1)
+    mesh = synth_house.build_house_mesh(house)
+    K = synth.intrinsics_for(synth.CaptureConfig(width=32, height=24)).matrix()
+
+    for placement in house.rooms:
+        poly = placement.spec.polygon
+        centre = poly.mean(axis=0)
+        eye = np.array([centre[0] + placement.tx, 1.5, centre[1] + placement.tz])
+        for yaw in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+            hit = geom.raycast(mesh, K, synth._rotation(float(yaw), 0.0), eye, 32, 24)
+            label = int(hit.label[12, 16])
+            depth = float(hit.depth[12, 16])
+            assert label != int(geom.Semantic.OUTSIDE) or depth > 3.0, (
+                f"{placement.room_id}: exterior geometry only {depth:.2f} m away at "
+                f"yaw {np.degrees(yaw):.0f} deg — it is inside the room"
+            )

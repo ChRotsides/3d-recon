@@ -291,8 +291,20 @@ def _exterior_mesh(spec: RoomSpec) -> TriMesh:
     """A slab of 'outside' 4 m beyond the room bbox. This is what a depth model
     hallucinates through an unmasked window."""
     poly = spec.polygon
-    lo, hi = poly.min(axis=0) - 4.0, poly.max(axis=0) + 4.0
-    y = spec.ceiling_height_m + 3.0
+    return exterior_box(poly.min(axis=0), poly.max(axis=0), spec.ceiling_height_m)
+
+
+def exterior_box(lo2: np.ndarray, hi2: np.ndarray, ceiling_m: float, margin: float = 4.0
+                 ) -> TriMesh:
+    """Exterior geometry around a 2D footprint bbox.
+
+    Split out from `_exterior_mesh` because in a *house* the exterior has to
+    surround the whole property, not each room. A per-room slab placed 4 m
+    beyond one room's bbox lands squarely inside its neighbours, and every scan
+    of those rooms then measures the intruding slab instead of its own wall.
+    """
+    lo, hi = np.asarray(lo2, dtype=np.float64) - margin, np.asarray(hi2, np.float64) + margin
+    y = ceiling_m + 3.0
     parts = []
     for x0, z0, x1, z1 in [
         (lo[0], lo[1], hi[0], lo[1]),

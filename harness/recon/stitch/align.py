@@ -46,6 +46,10 @@ class Alignment:
     covariance: np.ndarray
     accepted: bool
     reason: str = ""
+    #: False when ICP could not run, so the §6.3 RMSE gate never actually ran
+    #: either. An unverified edge must not be mistaken for one that passed:
+    #: `rmse_m` is NaN, and NaN fails every comparison silently.
+    verified: bool = True
 
     def matrix(self, up: np.ndarray | None = None) -> np.ndarray:
         return SE2Transform(yaw_rad=self.yaw_rad, tx=self.tx, tz=self.tz).matrix()
@@ -143,7 +147,8 @@ def align_doorways(
         radius=ICP_NEIGHBOURHOOD_M,
     )
     if refined is None:
-        align.reason = "no overlap near the doorway; kept the closed-form solution"
+        align.reason = "unverified: no overlap near the doorway to run ICP against"
+        align.verified = False
         return align
 
     refined.accepted = refined.rmse_m <= reject_rmse_m
@@ -239,6 +244,7 @@ def icp_point_to_plane(
         inliers=used,
         covariance=_covariance_from_residuals(rmse, used),
         accepted=True,
+        verified=True,
     )
 
 

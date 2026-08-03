@@ -154,7 +154,7 @@ def _extract_polygon(
     occ[ij[:, 0], ij[:, 1]] = True
 
     occ = _close_and_fill(occ, cfg.close_cells)
-    occ = _select_room(occ, lo, cfg, cams2d)
+    occ = _select_room(occ, lo, dims, cfg, planes, e0, e1, cams2d)
     contour = _largest_contour(occ)
     if contour is None or len(contour) < 4:
         return np.zeros((0, 2))
@@ -183,67 +183,115 @@ def _disk(radius_cells: int) -> np.ndarray:
     return (x * x + y * y) <= r * r
 
 
+def _wall_barrier(
+    planes: PlaneSet,
+    lo: np.ndarray,
+    dims: np.ndarray,
+    cfg: FloorplanConfig,
+    e0: np.ndarray,
+    e1: np.ndarray,
+) -> np.ndarray:
+    """Rasterise each fitted wall as a solid line segment.
+
+    The key point is that a wall is drawn across its **full fitted extent**,
+    including the gap where its doorway is. A doorway is part of the room's
+    boundary — the room ends there — so closing it is correct, and it is what
+    stops a flood fill from escaping into the room next door.
+    """
+    barrier = np.zeros(tuple(dims), dtype=bool)
+    step = cfg.grid_m * 0.4
+    for wall, pts in zip(planes.walls, planes.wall_inliers, strict=False):
+        if len(pts) < 20:
+            continue
+        n3 = wall.normal
+        n2 = np.array([n3 @ e0, n3 @ e1])
+        norm = float(np.linalg.norm(n2))
+        if norm < 1e-6:
+            continue
+        n2 = n2 / norm
+        along = np.array([-n2[1], n2[0]])
+        p2 = np.column_stack([pts @ e0, pts @ e1])
+        u = p2 @ along
+        c = float(np.median(p2 @ n2))
+        u0, u1 = float(u.min()), float(u.max())
+        if u1 - u0 < cfg.min_edge_m:
+            continue
+        ts = np.arange(u0, u1 + step, step)
+        line = c * n2[None, :] + ts[:, None] * along[None, :]
+        ij = np.floor((line - lo) / cfg.grid_m).astype(int)
+        ok = (
+            (ij[:, 0] >= 0) & (ij[:, 0] < dims[0])
+            & (ij[:, 1] >= 0) & (ij[:, 1] < dims[1])
+        )
+        barrier[ij[ok, 0], ij[ok, 1]] = True
+    return barrier
+
+
 def _select_room(
-    occ: np.ndarray, lo: np.ndarray, cfg: FloorplanConfig, cams2d: np.ndarray | None
+    occ: np.ndarray,
+    lo: np.ndarray,
+    dims: np.ndarray,
+    cfg: FloorplanConfig,
+    planes: PlaneSet,
+    e0: np.ndarray,
+    e1: np.ndarray,
+    cams2d: np.ndarray | None,
 ) -> np.ndarray:
     """Isolate *this* room from everything visible through its doorways.
 
-    See `FloorplanConfig.door_sever_radius_m`. Three properties matter:
+    A capture sees straight through an open doorway into the next room, and the
+    further the sweep gets the more of the neighbour it picks up — a dense
+    capture leaks *more* than a sparse one, so this cannot be left to coverage.
+    Nor is the leak a narrow neck that a morphological opening could sever: the
+    side walls of adjoining rooms are usually collinear, so the two regions meet
+    along a wide front.
 
-    * **Do nothing when there is nothing to do.** If the opening does not split
-      the region, this room is not looking into another one, and the original
-      occupancy is returned untouched. A morphological opening rounds corners,
-      and a rounded corner survives Douglas-Peucker as two extra vertices — so
-      applying it unconditionally damages every ordinary single-room capture to
-      solve a problem it does not have.
-    * **Pick by where the camera was**, not by area: the room next door may well
-      be the bigger one, and "largest blob" would then return the neighbour.
-    * **Restore the corners.** The eroded core is grown back against the
-      original occupancy, with the other cores' territory blocked off — the
-      room regains its true square corners without re-annexing the neighbour
-      through the doorway it was just cut from.
+    What does separate them is the walls themselves. Every fitted wall is drawn
+    as a barrier across its full extent (`_wall_barrier`), the barrier is
+    subtracted from the occupied floor, and the result is flood-filled from
+    where the camera actually stood. The flood cannot cross a wall, so it stops
+    at the doorway, and the room comes back bounded by its own walls.
+
+    Falls back to the untouched occupancy whenever the flood looks wrong — no
+    cameras, no walls, or a result so small it is clearly a mis-fill — because a
+    slightly-too-large footprint is a better failure than an empty one.
     """
     from scipy import ndimage
 
-    r_cells = max(int(round(cfg.door_sever_radius_m / cfg.grid_m)), 1)
-    disk = _disk(r_cells)
-    severed = ndimage.binary_opening(occ, structure=disk, border_value=0)
-    if not severed.any():
-        return occ  # the opening ate everything; better to keep the raw region
+    if cams2d is None or not len(cams2d) or not planes.walls:
+        return occ
 
-    lab, n = ndimage.label(severed)
-    if n <= 1:
-        return occ  # no doorway leak to cut
+    barrier = _wall_barrier(planes, lo, dims, cfg, e0, e1)
+    if not barrier.any():
+        return occ
 
-    chosen = None
-    if cams2d is not None and len(cams2d):
-        ij = np.floor((cams2d - lo) / cfg.grid_m).astype(int)
-        inside = (
-            (ij[:, 0] >= 0) & (ij[:, 0] < occ.shape[0])
-            & (ij[:, 1] >= 0) & (ij[:, 1] < occ.shape[1])
-        )
-        if inside.any():
-            hits = lab[ij[inside, 0], ij[inside, 1]]
-            hits = hits[hits > 0]
-            if len(hits):
-                chosen = int(np.bincount(hits).argmax())
-    if chosen is None:
-        sizes = ndimage.sum(severed, lab, index=range(1, n + 1))
-        chosen = int(np.argmax(sizes)) + 1
+    free = occ & ~barrier
+    lab, n = ndimage.label(free)
+    if n == 0:
+        return occ
 
-    core = lab == chosen
-    rivals = severed & ~core
-    blocked = ndimage.binary_dilation(rivals, structure=disk)
-    room = occ & ndimage.binary_dilation(core, structure=disk) & ~blocked
+    ij = np.floor((cams2d - lo) / cfg.grid_m).astype(int)
+    inside = (
+        (ij[:, 0] >= 0) & (ij[:, 0] < dims[0])
+        & (ij[:, 1] >= 0) & (ij[:, 1] < dims[1])
+    )
+    if not inside.any():
+        return occ
+    hits = lab[ij[inside, 0], ij[inside, 1]]
+    hits = hits[hits > 0]
+    if not len(hits):
+        return occ
+    room = lab == int(np.bincount(hits).argmax())
 
-    # Keep only the part still attached to the core.
-    lab2, n2 = ndimage.label(room)
-    if n2 == 0:
-        return core
-    keep = np.bincount(lab2[core & (lab2 > 0)])
-    if len(keep) <= 1:
-        return core
-    return lab2 == int(np.argmax(keep[1:])) + 1
+    # Grow back onto the wall cells the barrier removed, so the traced contour
+    # sits on the wall surface rather than one cell inside it.
+    grown = ndimage.binary_dilation(
+        room, structure=ndimage.generate_binary_structure(2, 2), iterations=2
+    ) & occ
+
+    if grown.sum() < 0.05 * occ.sum():
+        return occ  # implausibly small; trust the raw occupancy instead
+    return ndimage.binary_fill_holes(grown)
 
 
 def _largest_contour(occ: np.ndarray) -> np.ndarray | None:

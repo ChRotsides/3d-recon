@@ -31,6 +31,8 @@ from recon.schemas import Doorway, EdgeSource, RoomEdge, SE2Transform
 #: PLAN.md §6.3 step 4.
 ICP_REJECT_RMSE_M = 0.05
 ICP_NEIGHBOURHOOD_M = 2.0
+#: Minimum share of the doorway neighbourhood that must find a match.
+MIN_ICP_OVERLAP = 0.30
 
 
 @dataclass
@@ -50,6 +52,11 @@ class Alignment:
     #: either. An unverified edge must not be mistaken for one that passed:
     #: `rmse_m` is NaN, and NaN fails every comparison silently.
     verified: bool = True
+    #: Fraction of room B's near-doorway points that found a close counterpart
+    #: in room A. This is the better outlier signal: a wrong doorway pairing can
+    #: still produce a small RMSE over the few points that happen to line up,
+    #: but it cannot produce broad overlap.
+    overlap: float = 0.0
 
     def matrix(self, up: np.ndarray | None = None) -> np.ndarray:
         return SE2Transform(yaw_rad=self.yaw_rad, tx=self.tx, tz=self.tz).matrix()
@@ -110,6 +117,7 @@ def align_doorways(
     *,
     refine: bool = True,
     reject_rmse_m: float = ICP_REJECT_RMSE_M,
+    min_overlap: float = MIN_ICP_OVERLAP,
 ) -> Alignment:
     """Solve the 3-DoF transform taking room B into room A's frame.
 
@@ -151,13 +159,23 @@ def align_doorways(
         align.verified = False
         return align
 
-    refined.accepted = refined.rmse_m <= reject_rmse_m
-    if not refined.accepted:
+    if refined.rmse_m > reject_rmse_m:
+        refined.accepted = False
         refined.reason = (
             f"ICP RMSE {refined.rmse_m*100:.1f} cm exceeds the "
             f"{reject_rmse_m*100:.0f} cm gate; ask the user to re-tag the doorway"
         )
+    elif refined.overlap < min_overlap:
+        # A wrong pairing can fit a handful of points well. It cannot make two
+        # rooms broadly agree, so thin overlap is the more reliable tell.
+        refined.accepted = False
+        refined.reason = (
+            f"only {refined.overlap*100:.0f}% of the doorway neighbourhood matched "
+            f"(need {min_overlap*100:.0f}%); these are probably not the same doorway "
+            "— ask the user to re-tag it"
+        )
     else:
+        refined.accepted = True
         refined.reason = "ICP refined"
     return refined
 
@@ -173,6 +191,7 @@ def icp_point_to_plane(
     radius: float = ICP_NEIGHBOURHOOD_M,
     iterations: int = 30,
     max_correspondence_m: float = 0.30,
+    final_correspondence_m: float = 0.10,
     min_points: int = 50,
 ) -> Alignment | None:
     """3-DoF point-to-plane ICP, restricted to a neighbourhood of the doorway.
@@ -180,6 +199,17 @@ def icp_point_to_plane(
     Solving in 3 DoF rather than 6 is not just cheaper — it is what stops ICP
     from tilting one room relative to the other to explain depth noise. Gravity
     already fixed the other three degrees of freedom and they should stay fixed.
+
+    **The correspondence threshold is annealed** from `max_correspondence_m` to
+    `final_correspondence_m`, and the reported RMSE is measured at the tight
+    end. This matters more than it looks. Near a doorway each room sees a
+    good deal of geometry the other never did, and those points have no true
+    counterpart — at the ground-truth transform the median correspondence
+    distance is 0.75 cm but the 90th percentile is 46 cm. Scoring with a loose
+    30 cm gate lets that tail set the RMSE (6.0 cm, a fail) while the alignment
+    is in fact correct to a centimetre; at 10 cm the same alignment scores
+    1.6 cm. The loose threshold is still wanted early, so a rough initial guess
+    can pull in.
     """
     from scipy.spatial import cKDTree
 
@@ -202,8 +232,15 @@ def icp_point_to_plane(
     yaw, tx, tz = init.yaw_rad, init.tx, init.tz
     rmse = float("nan")
     used = 0
+    overlap = 0.0
+    thresholds = np.geomspace(
+        max(max_correspondence_m, final_correspondence_m),
+        final_correspondence_m,
+        max(iterations, 1),
+    )
 
-    for _ in range(iterations):
+    for it in range(iterations):
+        threshold = float(thresholds[it])
         r = _yaw_matrix(yaw)
         moved = b @ r.T + np.array([tx, 0.0, tz])
         # Only B points that landed near the doorway can correspond.
@@ -213,9 +250,10 @@ def icp_point_to_plane(
         src = moved[near_b]
 
         dist, idx = tree.query(src, k=1)
-        keep = dist <= max_correspondence_m
+        keep = dist <= threshold
         if keep.sum() < min_points:
             return None
+        overlap = float(keep.mean())
         src = src[keep]
         dst = a_near[idx[keep]]
         nrm = n_near[idx[keep]] if n_near is not None else None
@@ -245,6 +283,7 @@ def icp_point_to_plane(
         covariance=_covariance_from_residuals(rmse, used),
         accepted=True,
         verified=True,
+        overlap=overlap,
     )
 
 

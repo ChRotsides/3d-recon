@@ -12,6 +12,7 @@ import pytest
 from recon import synth_house
 from recon.schemas import Doorway, EdgeSource, RoomEdge, SE2Transform
 from recon.stitch.align import (
+    ICP_REJECT_RMSE_M,
     Alignment,
     align_doorways,
     icp_point_to_plane,
@@ -176,8 +177,15 @@ def test_icp_returns_none_without_overlap():
                               centre=np.array([0.0, 0.5, 0.5]), radius=2.0) is None
 
 
-def test_bad_alignment_is_rejected_by_the_rmse_gate():
-    """PLAN §6.3 step 4: RMSE > 5 cm means ask the user to re-tag."""
+def test_bad_alignment_is_rejected():
+    """PLAN §6.3 step 4: an alignment that does not hold up means re-tag.
+
+    Which of the two criteria fires depends on the failure. Here the clouds are
+    heavily perturbed, so annealing the correspondence threshold discards the
+    worst matches and the surviving RMSE looks acceptable — but the *overlap*
+    collapses, which is the point of having it. A wrong pairing can fit a few
+    points well; it cannot make two rooms broadly agree.
+    """
     a, na = _wall_cloud(seed=4)
     # A cloud that cannot be brought into agreement by any 3-DoF transform.
     rng = np.random.default_rng(5)
@@ -187,6 +195,60 @@ def test_bad_alignment_is_rejected_by_the_rmse_gate():
     al = align_doorways(dw_a, dw_b, UP, points_a=a, points_b=b, normals_a=na)
     assert not al.accepted
     assert "re-tag" in al.reason
+    assert al.overlap < 0.3, f"overlap {al.overlap:.2f} should have been the tell"
+
+
+def test_a_good_alignment_reports_broad_overlap():
+    """The overlap gate has to be quiet on a correct pairing or it is useless."""
+    a, na = _wall_cloud(seed=6)
+    init = Alignment(0.0, 0.0, 0.0, float("nan"), 0, np.eye(3), True)
+    out = icp_point_to_plane(a, na, a.copy(), init, UP,
+                             centre=np.array([0.0, 0.5, 0.5]), radius=3.0)
+    assert out is not None
+    assert out.overlap > 0.9, out.overlap
+    assert out.rmse_m < 0.01
+
+
+def test_annealed_correspondence_ignores_geometry_only_one_room_saw():
+    """The measured failure this fixes.
+
+    Near a doorway each room sees geometry the other never did, and those points
+    have no true counterpart. On real reconstructions, a *ground-truth*
+    alignment scored 6.0 cm with a 30 cm correspondence cap and 1.6 cm with a
+    10 cm one — the tail was setting the RMSE while the alignment was correct to
+    a centimetre, and the plan's 5 cm gate rejected it.
+
+    Reproduced by giving room B a slab of surface 25 cm behind room A's wall
+    that A never observed. It has to be a *minority* of the points: make it a
+    third of them and it biases the fit itself rather than sitting in the tail,
+    which is a different failure and not this one. One iteration, so this
+    measures the scoring and not the convergence.
+    """
+    a, na = _wall_cloud(n=2000, seed=7)
+    rng = np.random.default_rng(8)
+    unseen = np.column_stack([
+        rng.uniform(-1.5, 1.5, 150),
+        rng.uniform(0.0, 2.2, 150),
+        np.full(150, -0.25),
+    ])
+    b = np.vstack([a, unseen])
+
+    init = Alignment(0.0, 0.0, 0.0, float("nan"), 0, np.eye(3), True)
+    kw = dict(centre=np.array([0.0, 0.5, 0.5]), radius=3.0, iterations=1)
+    tight = icp_point_to_plane(a, na, b, init, UP, max_correspondence_m=0.10,
+                               final_correspondence_m=0.10, **kw)
+    loose = icp_point_to_plane(a, na, b, init, UP, max_correspondence_m=0.40,
+                               final_correspondence_m=0.40, **kw)
+    assert tight is not None and loose is not None
+
+    assert loose.rmse_m > ICP_REJECT_RMSE_M, (
+        "the loose cap should fail the gate on a perfect alignment — otherwise "
+        "this test is not reproducing the bug"
+    )
+    assert tight.rmse_m < 0.01, f"{tight.rmse_m*100:.2f} cm"
+    # The unseen slab shows up as slightly reduced overlap, which is correct:
+    # it is genuinely unmatched, not silently absorbed into the score.
+    assert tight.overlap < loose.overlap
 
 
 # -- doorway matching -------------------------------------------------------
@@ -508,7 +570,6 @@ def test_house_exterior_does_not_intrude_into_other_rooms(tmp_path):
     work would have fixed that.
     """
     import numpy as np
-
     from recon import geom, synth, synth_house
 
     house = synth_house.corridor_house(n_rooms=3, seed=1)
@@ -527,3 +588,60 @@ def test_house_exterior_does_not_intrude_into_other_rooms(tmp_path):
                 f"{placement.room_id}: exterior geometry only {depth:.2f} m away at "
                 f"yaw {np.degrees(yaw):.0f} deg — it is inside the room"
             )
+
+
+@pytest.mark.slow
+def test_house_drift_end_to_end(tmp_path):
+    """PLAN §1.3: <=15 cm end-to-end drift, measured on real reconstructions.
+
+    The counterpart to `test_six_room_house_drift_is_within_target`, which uses
+    analytic doorways and so only exercises the solver. This one reconstructs
+    each room from rendered captures, detects its doorways, aligns and solves —
+    the whole path.
+
+    Drift is measured on the room **centroid**, not its local origin. A room
+    that is rectangular with symmetrically placed doors maps onto itself under a
+    half-turn, so an equally valid solution can place it at yaw 180 and its
+    origin then lands at the opposite corner. Scoring the origin reported 5.6 m
+    of "drift" for a room sitting exactly where it belonged.
+    """
+    import numpy as np
+    from recon import geom, synth, synth_house
+    from recon.masking.base import GroundTruthMasker
+    from recon.pipeline import Pipeline
+    from recon.stitch.house import house_footprints, reconstruct_rooms, stitch
+
+    house = synth_house.corridor_house(n_rooms=3, seed=1)
+    cfg = synth.CaptureConfig(width=150, height=113, n_stations=3, yaw_step_deg=30,
+                              max_keyframes=80)
+    gt = synth_house.generate_house(house, tmp_path, cfg)
+
+    rooms = reconstruct_rooms([tmp_path / r["room_id"] for r in gt.rooms],
+                              Pipeline(masker=GroundTruthMasker()))
+    conns = [(gt.rooms[a]["room_id"], gt.rooms[b]["room_id"]) for a, b in gt.connections]
+    result = stitch(rooms, conns, np.array([0.0, 1.0, 0.0]), property_id="test")
+
+    joined = {e.from_room for e in result.graph.floors[0].edges} | {
+        e.to_room for e in result.graph.floors[0].edges
+    }
+    assert len(joined) == len(gt.rooms), (
+        f"only {len(joined)} of {len(gt.rooms)} rooms were joined: {result.rejected}"
+    )
+    assert not result.pose.ambiguous, result.pose.ambiguity_note
+
+    for _a, _b, _da, _db, al in result.alignments:
+        assert al.rmse_m <= 0.05, f"ICP RMSE {al.rmse_m*100:.1f} cm"
+        assert al.overlap >= 0.30, f"overlap {al.overlap:.2f}"
+
+    footprints = house_footprints(result)
+    worst = 0.0
+    for r in gt.rooms:
+        truth = np.asarray(r["footprint"]) + np.array([r["tx"], r["tz"]])
+        worst = max(worst, float(
+            np.linalg.norm(footprints[r["room_id"]].mean(axis=0) - truth.mean(axis=0))
+        ))
+    assert worst <= 0.15, f"worst room drift {worst*100:.1f} cm"
+
+    area = sum(abs(geom.polygon_area(p)) for p in footprints.values())
+    truth_area = sum(r["area_m2"] for r in gt.rooms)
+    assert abs(area / truth_area - 1.0) < 0.05, f"total area {area:.2f} vs {truth_area:.2f}"

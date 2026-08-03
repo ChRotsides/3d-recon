@@ -29,6 +29,7 @@ import numpy as np
 from recon.depth.base import DepthEstimator, DepthResult, GroundTruthDepth
 from recon.fusion.tsdf import TSDFConfig, TSDFVolume, fuse
 from recon.io.bundle import BundleDir
+from recon.io.export import write_glb, write_pdf_floorplan
 from recon.layout.floorplan import FloorplanConfig, build_layout, to_svg
 from recon.layout.planes import PlaneConfig, PlaneSet, extract_planes
 from recon.masking.base import Masker, MaskResult, NullMasker
@@ -47,6 +48,9 @@ class PipelineConfig:
     #: Train a splat model. Off by default: it is the only GPU-bound step.
     train_splats: bool = False
     write_artifacts: bool = True
+    #: PLAN §1.1 export set. SVG and JSON are always written; these are the rest.
+    export_glb: bool = True
+    export_pdf: bool = True
 
 
 @dataclass
@@ -165,20 +169,35 @@ class Pipeline:
             self.write_artifacts(result, Path(out_dir))
         return result
 
-    @staticmethod
-    def write_artifacts(result: PipelineResult, out_dir: Path) -> None:
+    def write_artifacts(self, result: PipelineResult, out_dir: Path) -> None:
+        """Step 7: package. PLAN §1.1 ships SPZ, GLB, SVG/PDF and layout JSON."""
+        out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "layout.json").write_text(result.layout.model_dump_json(indent=2))
         (out_dir / "floorplan.svg").write_text(to_svg(result.layout))
         (out_dir / "summary.json").write_text(json.dumps(result.summary(), indent=2))
         (out_dir / "scale_report.txt").write_text(result.scale.report())
 
-        pts, nrm = result.volume.surface_points(min_weight=result.volume.weight.max() * 0.0 + 1.5)
+        pts, nrm = result.volume.surface_points(min_weight=self.config.tsdf.min_weight)
         _write_point_ply(out_dir / "fused_points.ply", pts, nrm)
 
         mesh = result.volume.extract_mesh()
         if mesh is not None:
+            # PLY stays the archival master (PLAN §3.7); GLB is what ships.
             _write_mesh_ply(out_dir / "fused_mesh.ply", mesh)
+            if self.config.export_glb:
+                write_glb(
+                    out_dir / "room.glb", mesh.vertices, mesh.faces,
+                    name=result.room_id,
+                    extras={
+                        "room_id": result.room_id,
+                        "scale_applied": result.layout.scale_applied,
+                        "area_m2": result.layout.area_m2,
+                    },
+                )
+
+        if self.config.export_pdf and len(result.layout.footprint) >= 3:
+            write_pdf_floorplan(out_dir / "floorplan.pdf", result.layout)
 
 
 def _write_point_ply(path: Path, pts: np.ndarray, nrm: np.ndarray) -> None:

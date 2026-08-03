@@ -146,7 +146,8 @@ Found while building; all verified. See [`licensing-audit.md`](licensing-audit.m
 | Rust guidance core (§6.1) | done | 20 tests |
 | Room stitching solver (§6.3) | done | 29 tests |
 | Room isolation in a connected house | done | ±0.1% area |
-| Integrated stitch -> drift target | **open** | see §7b |
+| Integrated stitch -> drift target | done | 12.6 cm on 6 rooms, see §7b |
+| GLB / SPZ / PDF export | done | 18 tests |
 | Android pose logger | **builds** | APK + 6 JVM tests |
 | DA3 / MapAnything / SAM 3 adapters | written | ❌ needs GPU |
 | PGSR clean-room trainer | **not written** | see §6 |
@@ -235,36 +236,93 @@ inside the neighbouring rooms. Room 0 was measuring room 1's exterior slab
 standing in the middle of its own floor. Now built once around the whole
 property, guarded by `test_house_exterior_does_not_intrude_into_other_rooms`.
 
-## 7b. Open issue: end-to-end stitching does not yet meet the drift target
+## 7b. End-to-end stitching now meets the drift target
 
-The stitching **solver** is correct and tested (29 tests: yaw convention,
-closed-form alignment, ICP, pose graph, loop closure, outlier robustness, and
-≤15 cm drift across a six-room house using analytic doorways). The **integrated**
-path — reconstruct real rooms, detect their doorways, align, solve — does not
-yet reach the target. Two findings, both measured rather than guessed:
+**Six-room house, full integrated path** — render captures, reconstruct each
+room, detect its doorways, align, solve the house graph:
 
-1. **The §6.3 5 cm ICP gate has no margin for residual scale.** Evaluating the
-   point-to-plane RMSE at the *ground-truth* transform between two adjacent
-   reconstructed rooms gives **5.71 cm** — already a fail, on a perfect
-   alignment. The rooms differ by ~0.9% residual scale after the §6.2 per-room
-   solve, and a rigid ICP has to absorb that as position error. Adding scale as
-   a fourth ICP DoF was tried and only moved 6.0 → 5.6 cm, so scale is not the
-   dominant term; it was reverted rather than kept as unpaid-for complexity.
-   The residual needs proper attribution before the gate can be trusted or
-   changed — moving the threshold without knowing what it is measuring would
-   just be tuning until green.
+| | |
+|---|---|
+| worst room drift | **12.6 cm** (target ≤15 cm) |
+| RMS drift | 6.8 cm |
+| end-to-end span error | 6.0 cm over 19.9 m |
+| edges accepted | 5 of 5 |
+| ICP RMSE per edge | 1.06 – 1.53 cm |
+| doorway overlap per edge | 0.69 – 0.73 |
+| total floor area | −0.12% |
 
-2. **Doorway pairing in a corridor of identical doors is under-determined.**
-   Fixed so far: a doorway may join exactly one pair of rooms (reusing one
-   produced a clean 180° flip that no ICP or overlap test objected to), rooms
-   may not interpenetrate, unverified alignments are flagged rather than
-   silently treated as having passed the gate, and rooms left disconnected are
-   reported instead of floating wherever the initial guess put them. The plan's
-   own answer — the user taps the same doorway in both rooms (§6.3 path B step
-   1) — is supported via `stitch(pairing=...)` and sidesteps this entirely; the
-   automatic path is the one still short.
+Getting there took two real fixes and one correction to the *measurement*.
+
+### The ICP gate was scoring geometry the rooms did not share
+
+The §6.3 5 cm gate was failing correct alignments: point-to-plane RMSE at the
+**ground-truth** transform between two adjacent reconstructed rooms was 5.71 cm.
+
+The cause was the correspondence threshold, not the alignment. Near a doorway
+each room sees a good deal of geometry the other never did, and those points
+have no true counterpart. At the ground-truth transform the median
+correspondence distance is **0.75 cm** — but the 90th percentile is **46 cm**.
+A 30 cm correspondence cap lets that tail set the score:
+
+| correspondence cap | kept | RMSE at ground truth |
+|---|---|---|
+| 30 cm (was) | 83% | 6.00 cm — fails |
+| 10 cm (now) | 68% | **1.59 cm** |
+| 5 cm | 63% | 0.71 cm |
+
+The threshold is now annealed from 30 cm to 10 cm across the iterations — loose
+early so a rough initial guess can pull in, tight at the end so the reported
+RMSE measures the alignment rather than the non-overlap.
+
+Scale was investigated first and ruled out: the two rooms differ by ~0.9%
+residual scale after the §6.2 solve, but adding scale as a fourth ICP DoF moved
+RMSE only 6.0 → 5.6 cm. It was reverted rather than kept as complexity that had
+not paid for itself.
+
+**Overlap fraction is now the primary outlier signal.** A wrong doorway pairing
+can fit a handful of points well and post a small RMSE; it cannot make two rooms
+broadly agree. Correct pairings run 0.69–0.73; the deliberately-corrupted test
+case collapses to 0.19.
+
+### Doorway pairing in a corridor of identical doors
+
+A doorway may join exactly one pair of rooms. Reusing one let a room attach
+through the door it had already arrived by — a clean 180° flip that neither ICP
+nor an interpenetration test objects to, because the result does not intersect
+anything. Also added: rooms may not interpenetrate, unverified alignments are
+flagged rather than treated as having passed the gate, and rooms left with no
+accepted edge are reported instead of floating wherever the initial guess put
+them.
+
+### The drift metric was wrong
+
+It compared each room's **local origin** to truth. A rectangular room with
+symmetrically placed doors maps onto itself under a half-turn, so an equally
+valid solution places it at yaw 180° and its origin lands at the opposite
+corner. That reported 5.6 m of "drift" for a room sitting exactly where it
+belonged. Drift is now measured on the room centroid, after a rigid best-fit
+alignment of the reconstructed house to truth — without that the anchor room
+itself showed 8.8 cm, which is a global frame offset and not drift at all.
 
 ---
+
+## 7c. SPZ is not verified byte-compatible
+
+`recon/io/export.py` implements the SPZ *scheme* from plan §3.7 — quantise,
+entropy-code, keep spherical harmonics — and it round-trips through its own
+reader with the precision and size properties asserted in tests. It has **not**
+been checked against `nianticlabs/spz` or its specification, and there is at
+least one deliberate divergence:
+
+Quaternions use **smallest-three** encoding (drop the largest component, store
+the other three at 10 bits each) rather than storing xyz and recovering w from
+the unit-norm constraint. The latter is ill-conditioned wherever w is small —
+`dw/d|xyz|` grows without bound as w → 0 — and measured **up to 10.4° of
+rotation error**, enough to visibly reorient a Gaussian. Smallest-three keeps it
+under 0.3° for one extra byte per splat.
+
+Before any client consumes these files, validate against the reference decoder
+or generate them with the reference encoder.
 
 ## 8. Next
 

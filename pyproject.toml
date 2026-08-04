@@ -51,6 +51,12 @@ packages = ["harness/recon"]
 [tool.pytest.ini_options]
 testpaths = ["harness/tests"]
 pythonpath = ["harness", "server"]
+# The slow tests render synthetic scenes — ~30 MB per run — and pytest keeps
+# the last three runs' tmp dirs by default. Across a day of iterations that is
+# hundreds of megabytes of rendered rooms nobody will look at again. Keep only
+# what a failure needs for diagnosis.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "gpu: requires a CUDA GPU with compute capability >= 7.0",
     "geometry: requires the optional Open3D/OpenCV stack",

@@ -153,6 +153,7 @@ Found while building; all verified. See [`licensing-audit.md`](licensing-audit.m
 | Automatic doorway pairing | **unreliable** | see §7d |
 | Walkthrough viewer (§3.8) | done | 11 tests |
 | Continuous tracking (§6.3 path A) | done | 15 tests, mutation-checked |
+| UniFFI bindings (ADR-0001) | done | Android compiles against them |
 | Android pose logger | **builds** | APK + 6 JVM tests |
 | DA3 / MapAnything / SAM 3 adapters | written | ❌ needs GPU |
 | PGSR clean-room trainer | **not written** | see §6 |
@@ -417,6 +418,42 @@ as ground truth.
 
 All three guards were mutation-tested — disabling each one fails exactly the
 test written for it, and nothing else.
+
+## 7g. UniFFI: the shared core is now actually shared
+
+ADR-0001 chose native shells over a shared Rust core, and noted that UniFFI
+bindings were needed before Phase 3. Until now they did not exist, so both
+clients hand-maintained their own copy of the keyframe rule — flagged as a
+stopgap in both files, which is exactly the drift a shared core exists to
+prevent.
+
+`core/src/ffi.rs` is the binding surface, deliberately a thin wrapper rather
+than annotations on the core types: the core stays free of FFI concerns and
+testable as plain Rust, and the clients get an API shaped for what an app does
+(push a frame, get back what to show the user) instead of the internals of a
+voxel grid.
+
+Verified here:
+
+* the crate builds with UniFFI and all 20 core tests still pass;
+* Kotlin **and** Swift bindings generate, and both are committed so a client
+  build needs no Rust toolchain;
+* **the Android app compiles against the generated Kotlin** (`:app:compileDebugKotlin`
+  → BUILD SUCCESSFUL) and its unit tests still pass.
+
+**Not** verified: the native `.so`/`.xcframework` are not cross-compiled, so
+nothing has *called* the core from a client at runtime. Each Rust target
+toolchain is a couple of hundred megabytes and this box has ~1 GB of disk free.
+`core/README.md` has the `cargo-ndk` commands.
+
+Until the clients call `defaultParams()` over the bindings, the duplicated
+constants remain — but they are now **guarded**. `test_client_core_parity.py`
+parses the thresholds out of the Rust, Kotlin and Swift sources and asserts they
+agree, needing no Rust toolchain, no NDK and no device. Mutation-checked:
+drifting Android to 12° or the iOS keyframe cap to 200 each fail exactly the
+test written for them. The silent failure it prevents is iOS accepting keyframes
+at 12° while Android holds at 15° — both apps work, and Phase 0 reports a
+per-platform quality difference nobody can explain.
 
 ## 8. Next
 

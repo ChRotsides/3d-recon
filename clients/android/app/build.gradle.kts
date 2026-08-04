@@ -27,6 +27,10 @@ android {
 
 dependencies {
     implementation("com.google.ar:core:1.49.0")
+    // UniFFI-generated bindings for the shared Rust guidance core (ADR-0001).
+    // JNA is how they reach the native library at runtime; the .so itself is
+    // produced by cargo-ndk and is not needed to compile against them.
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")

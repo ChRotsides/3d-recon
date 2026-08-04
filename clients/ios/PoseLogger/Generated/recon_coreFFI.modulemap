@@ -1,0 +1,4 @@
+module recon_coreFFI {
+    header "recon_coreFFI.h"
+    export *
+}

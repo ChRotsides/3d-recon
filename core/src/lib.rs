@@ -10,7 +10,11 @@
 //! world<-camera poses, camera looking down -Z. **ARCore's frame is converted
 //! at the client boundary, not here.**
 
+// UniFFI scaffolding must live at the crate root.
+uniffi::setup_scaffolding!();
+
 pub mod coverage;
+pub mod ffi;
 pub mod math;
 pub mod quality;
 pub mod session;

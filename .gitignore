@@ -40,3 +40,4 @@ clients/android/app/build/
 clients/android/build/
 clients/android/local.properties
 viewer/vendor/
+core/bindings/

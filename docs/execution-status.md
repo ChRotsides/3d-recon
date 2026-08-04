@@ -152,6 +152,7 @@ Found while building; all verified. See [`licensing-audit.md`](licensing-audit.m
 | Loop-closure detection (§6.3) | done | 7.9 -> 6.2 cm on a 2x2 house |
 | Automatic doorway pairing | **unreliable** | see §7d |
 | Walkthrough viewer (§3.8) | done | 11 tests |
+| Continuous tracking (§6.3 path A) | done | 15 tests, mutation-checked |
 | Android pose logger | **builds** | APK + 6 JVM tests |
 | DA3 / MapAnything / SAM 3 adapters | written | ❌ needs GPU |
 | PGSR clean-room trainer | **not written** | see §6 |
@@ -383,6 +384,39 @@ Two things are deliberate:
 The vendored `viewer/vendor/babylon.js` is *not* committed — it is a build-time
 asset the app bundles. The page reports a clear error if it is absent rather
 than silently rendering nothing.
+
+## 7f. Continuous capture (§6.3 path A)
+
+Path A — one live AR session walked through several rooms — is the plan's
+preferred route, and a fundamentally easier problem than path B: the rooms were
+never in separate frames, so there is no relative transform to solve. What has
+to be solved instead is **segmentation**, and the plan's answer is to watch the
+trajectory cross doorways.
+
+`recon/stitch/continuous.py` does that. Three qualifications on "sign change of
+the distance to the doorway plane", each because the naive version is wrong in a
+specific way:
+
+* the crossing point must be **inside the opening** — the plane extends forever
+  but the door does not, so without it walking down a corridor registers a
+  crossing at every door it passes;
+* the trajectory must **clear the plane on both sides** — otherwise tracking
+  noise jitters the sign while someone stands in a doorway and produces a burst
+  of "transitions";
+* **height is checked** — everything shares one frame in path A, including
+  other floors.
+
+Visits are then merged into rooms by proximity, because a real capture revisits:
+walk to the far bedroom and come back through the hall, and the hall is one room
+seen twice. Without merging, a two-room house reports three.
+
+Edges carry the **identity** transform with much tighter covariance than a
+doorway ICP match — legitimately, since the only error is VIO drift over the
+walk. Deliberately not zero: treating it as exact would let that drift propagate
+as ground truth.
+
+All three guards were mutation-tested — disabling each one fails exactly the
+test written for it, and nothing else.
 
 ## 8. Next
 

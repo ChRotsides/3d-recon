@@ -284,6 +284,133 @@ def _without_exterior(spec: synth.RoomSpec) -> synth.RoomSpec:
     )
 
 
+def continuous_path(house: HouseSpec, per_station: int = 1) -> list[tuple[np.ndarray, str]]:
+    """A walking route through the whole house, in the house frame.
+
+    Path A's premise is one live AR session across several rooms, so the
+    trajectory has to actually pass through the doorways rather than teleport
+    between rooms — the segmentation is *defined* by those crossings.
+    """
+    out: list[tuple[np.ndarray, str]] = []
+    for i, placement in enumerate(house.rooms):
+        poly = placement.spec.polygon
+        stations = synth.plan_stations(placement.spec, max(per_station, 1))
+        for st in stations:
+            p = placement.to_house(np.array([[st[0], synth.STANDING_EYE_HEIGHT_M, st[1]]]))[0]
+            out.append((p, placement.room_id))
+        # Then step to the doorway that leads onward, so the walk is continuous.
+        if i + 1 < len(house.rooms):
+            nxt = house.rooms[i + 1]
+            mid = 0.5 * (
+                placement.to_house(
+                    np.array([[poly[:, 0].mean(), synth.STANDING_EYE_HEIGHT_M,
+                               poly[:, 1].mean()]])
+                )[0]
+                + nxt.to_house(
+                    np.array([[nxt.spec.polygon[:, 0].mean(), synth.STANDING_EYE_HEIGHT_M,
+                               nxt.spec.polygon[:, 1].mean()]])
+                )[0]
+            )
+            out.append((mid, placement.room_id))
+    return out
+
+
+def room_containing(house: HouseSpec, position: np.ndarray) -> str | None:
+    """Which room's footprint contains a house-frame point, if any."""
+    p2 = np.array([[position[0], position[2]]])
+    for placement in house.rooms:
+        poly = placement.spec.polygon
+        pts3 = np.column_stack([poly[:, 0], np.zeros(len(poly)), poly[:, 1]])
+        moved = placement.to_house(pts3)
+        if geom.point_in_polygon(p2, np.column_stack([moved[:, 0], moved[:, 2]]))[0]:
+            return placement.room_id
+    return None
+
+
+def generate_continuous(
+    house: HouseSpec,
+    out_dir: Path,
+    cfg: synth.CaptureConfig | None = None,
+    *,
+    room_id: str = "continuous",
+    steps_between: int = 6,
+) -> tuple[list[str], Path]:
+    """Render one capture session that walks through every room (§6.3 path A).
+
+    Emits a *single* bundle with every pose in the house frame, plus the true
+    room label for each keyframe — which is the ground truth the segmentation is
+    scored against.
+    """
+    from PIL import Image
+
+    cfg = cfg or synth.CaptureConfig()
+    out_dir = Path(out_dir)
+    (out_dir / "images").mkdir(parents=True, exist_ok=True)
+    (out_dir / "depth").mkdir(exist_ok=True)
+    (out_dir / "masks").mkdir(exist_ok=True)
+
+    mesh = build_house_mesh(house)
+    intr = synth.intrinsics_for(cfg)
+    K = intr.matrix()
+    waypoints = continuous_path(house)
+    light = np.array([0.0, max(p.spec.ceiling_height_m for p in house.rooms) - 0.15, 0.0])
+
+    keyframes = []
+    labels: list[str] = []
+    n = 0
+    for (a, room_a), (b, _room_b) in zip(waypoints, waypoints[1:], strict=False):
+        for k in range(steps_between):
+            t = k / steps_between
+            pos = a + t * (b - a)
+            # Look along the walk, sweeping so walls are actually observed.
+            yaw = float(np.arctan2(b[0] - a[0], -(b[2] - a[2]))) + np.sin(n * 0.9) * 1.2
+            pitch = np.radians(-12.0 + 18.0 * np.sin(n * 0.6))
+            R = synth._rotation(yaw, pitch)
+            rgb, depth, sem = synth.render(mesh, K, R, pos, cfg.width, cfg.height, light,
+                                           simulate_artifacts=cfg.simulate_artifacts)
+            kf_id = f"kf_{n:04d}"
+            Image.fromarray(rgb).save(out_dir / "images" / f"{kf_id}.png")
+            Image.fromarray(
+                np.clip(depth * 1000.0, 0, 65535).astype(np.uint16)
+            ).save(out_dir / "depth" / f"{kf_id}.png")
+            Image.fromarray(
+                np.clip(sem + 1, 0, 255).astype(np.uint8)
+            ).save(out_dir / "masks" / f"{kf_id}.png")
+            keyframes.append(
+                synth.Keyframe(
+                    id=kf_id, image=f"images/{kf_id}.png", depth=f"depth/{kf_id}.png",
+                    timestamp_ns=int(n * 5e8),
+                    pose=synth.Pose(R=R.tolist(), t=pos.tolist()),
+                    intrinsics=intr, blur_score=300.0,
+                )
+            )
+            # Label by which room actually *contains* the camera, not by which
+            # waypoint leg it is on. The waypoint between two rooms sits past
+            # the shared wall, so leg-based labelling puts keyframes that are
+            # physically in the next room under the previous one — and then
+            # scores a correct segmentation as wrong.
+            labels.append(room_containing(house, pos) or room_a)
+            n += 1
+
+    bundle = synth.SessionBundle(
+        session_id=str(uuid.uuid4()),
+        device=synth.Device(model="synthetic", os="n/a",
+                            ar_platform=synth.ARPlatform.SYNTHETIC,
+                            ar_version="recon-synth/continuous"),
+        room_id=room_id,
+        gravity=[0.0, -1.0, 0.0],
+        keyframes=keyframes,
+        reference_measurements=[
+            synth.ReferenceMeasurement(
+                type=synth.MeasurementType.VIO_SCALE, measured_value_m=1.0, sigma_m=0.03
+            )
+        ],
+    )
+    (out_dir / "bundle.json").write_text(bundle.model_dump_json(indent=2))
+    (out_dir / "room_labels.json").write_text(json.dumps(labels, indent=2))
+    return labels, out_dir
+
+
 @dataclass
 class HouseGroundTruth:
     property_id: str

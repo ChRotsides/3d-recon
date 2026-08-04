@@ -28,6 +28,12 @@ def _scene(tmp_path, preset: str, **kw):
     return BundleDir.load(tmp_path / preset)
 
 
+#: Denser than FAST. The furniture regression only appeared at this sampling —
+#: a sparse capture never resolves the wardrobe well enough for RANSAC to fit it
+#: as a plane, which is why the unit tests missed what the benchmark caught.
+DENSE = dict(width=240, height=180, n_stations=3, yaw_step_deg=24, max_keyframes=90)
+
+
 @pytest.fixture(scope="module")
 def rect_scene(tmp_path_factory):
     return _scene(tmp_path_factory.mktemp("rect"), "empty_rect", vio_scale_error=1.025)
@@ -117,21 +123,43 @@ def test_l_shaped_room_keeps_its_notch(tmp_path):
     assert m.passes()
 
 
-def test_masking_before_fusion_prevents_phantom_geometry(tmp_path):
-    """PLAN.md §7: unmasked mirrors and windows must visibly wreck the room, and
-    masking must fix it. If this test ever passes for the *unmasked* case the
-    synthetic artifacts have stopped reproducing the real failure mode."""
-    scene = _scene(tmp_path, "mirror_heavy")
+def test_masking_before_fusion_protects_the_3d_geometry(tmp_path):
+    """PLAN §7: unmasked mirrors and windows put phantom surface behind the wall.
+
+    What masking buys has **moved**, and the honest test moved with it. It used
+    to be the floor plan: before room isolation existed, an unmasked
+    mirror-heavy scene reported 91% wall error and +52% area. Room isolation now
+    confines the footprint to the flood fill from the camera track, so the *plan*
+    survives without masking — a robustness win that was not designed for.
+
+    The phantom geometry is still there, though, and still wrong. It shows up
+    where it always was: in the fused surface. So this asserts on Chamfer
+    distance, which is what a mesh or splat deliverable is actually made of.
+    """
+    from recon.eval.bench import _read_ply_mesh
+    from recon.eval.metrics import chamfer
+
+    scene = _scene(tmp_path, "mirror_heavy", **DENSE)
     gt = scene.ground_truth()
 
     masked = Pipeline(masker=GroundTruthMasker()).run(scene)
-    m_masked = layout_metrics(masked.layout, gt)
-    assert m_masked.passes()
+    assert layout_metrics(masked.layout, gt).passes()
 
     unmasked = Pipeline(masker=NullMasker()).run(scene)
-    m_unmasked = layout_metrics(unmasked.layout, gt)
-    assert not m_unmasked.passes(), "the phantom-room failure mode stopped reproducing"
-    assert m_unmasked.wall_error_max_abs_pct > 10 * max(m_masked.wall_error_max_abs_pct, 0.05)
+
+    mesh = _read_ply_mesh(scene.gt_mesh_path())
+    truth = mesh.sample_surface(120_000, np.random.default_rng(0))
+    scores = {}
+    for name, res in (("masked", masked), ("unmasked", unmasked)):
+        pts, _n = res.volume.surface_points(min_weight=1.0)
+        scores[name] = chamfer(pts, truth).chamfer_m
+
+    assert scores["unmasked"] > 2.0 * scores["masked"], (
+        f"masking should still protect the geometry: masked "
+        f"{scores['masked']*100:.1f} cm vs unmasked {scores['unmasked']*100:.1f} cm — "
+        "if these have converged, the synthetic mirror artifacts have stopped "
+        "reproducing the real failure mode"
+    )
 
 
 def test_door_is_detected(rect_scene):
@@ -155,3 +183,33 @@ def test_match_walls_is_rotation_invariant():
     lengths_g = np.linalg.norm(np.roll(poly, -1, axis=0) - poly, axis=1)
     for i, j in pairs:
         assert lengths_p[i] == pytest.approx(lengths_g[j])
+
+
+@pytest.mark.slow
+def test_furniture_is_not_mistaken_for_a_room_boundary(tmp_path):
+    """Regression: the benchmark caught this and the unit tests did not.
+
+    Room isolation uses fitted walls as barriers to stop a flood fill escaping
+    through a doorway. RANSAC finds *vertical planes*, and a wardrobe is a
+    vertical plane — so the wardrobe was drawn as a barrier straight across the
+    room, the fill stopped at it, and wall length came out **41% wrong** on the
+    two furnished scenes. Both had passed at 0.06% the run before.
+
+    Two things separate a room boundary from furniture, and it needs both: a
+    wall reaches the ceiling (measured 2.44 m against the wardrobe's 1.96 m in a
+    2.46 m room), and a boundary is one of the *major* planes — a spurious plane
+    tilted 5 degrees off the back wall reached the ceiling but carried 5% of its
+    support, and sliced the room diagonally.
+    """
+    for preset in ("furnished", "mirror_heavy"):
+        scene = _scene(tmp_path / preset, preset, **DENSE)
+        res = Pipeline(masker=GroundTruthMasker()).run(scene)
+        m = layout_metrics(res.layout, scene.ground_truth())
+        assert m.n_walls_pred == 4, (
+            f"{preset}: {m.n_walls_pred} walls in a 4-wall room — furniture was "
+            "treated as a boundary"
+        )
+        assert m.passes(), (
+            f"{preset}: wall {m.wall_error_max_abs_pct:.2f}%, "
+            f"area {m.area_error_pct:+.2f}%"
+        )

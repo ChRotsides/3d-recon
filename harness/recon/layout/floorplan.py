@@ -35,6 +35,11 @@ class FloorplanConfig:
     grid_m: float = 0.05
     #: Morphological closing radius, in cells, to bridge gaps under furniture.
     close_cells: int = 3
+    #: A plane is only used as a room barrier if its inliers reach within this
+    #: of the ceiling, and carry at least this share of the best-supported
+    #: wall's inliers. See `_wall_barrier`.
+    barrier_ceiling_gap_m: float = 0.35
+    barrier_min_support: float = 0.12
     #: Radius of the opening used to sever doorway necks, in metres.
     #:
     #: A capture sees straight through an open doorway into the next room, so
@@ -154,7 +159,7 @@ def _extract_polygon(
     occ[ij[:, 0], ij[:, 1]] = True
 
     occ = _close_and_fill(occ, cfg.close_cells)
-    occ = _select_room(occ, lo, dims, cfg, planes, e0, e1, cams2d)
+    occ = _select_room(occ, lo, dims, cfg, planes, e0, e1, up, cams2d)
     contour = _largest_contour(occ)
     if contour is None or len(contour) < 4:
         return np.zeros((0, 2))
@@ -190,18 +195,41 @@ def _wall_barrier(
     cfg: FloorplanConfig,
     e0: np.ndarray,
     e1: np.ndarray,
+    up: np.ndarray,
 ) -> np.ndarray:
     """Rasterise each fitted wall as a solid line segment.
 
-    The key point is that a wall is drawn across its **full fitted extent**,
-    including the gap where its doorway is. A doorway is part of the room's
-    boundary — the room ends there — so closing it is correct, and it is what
-    stops a flood fill from escaping into the room next door.
+    A wall is drawn across its **full fitted extent**, including the gap where
+    its doorway is. A doorway is part of the room's boundary — the room ends
+    there — so closing it is correct, and it is what stops a flood fill from
+    escaping into the room next door.
+
+    Only planes that **reach the ceiling** are used. RANSAC finds vertical
+    planes, and a wardrobe is a vertical plane: on the furnished scene the
+    wardrobe was drawn as a barrier straight across the room, the flood fill
+    stopped at it, and the reported wall length was 41% out. Furniture stops
+    short of the ceiling and real walls do not, which separates them cleanly —
+    measured spans were 1.96 m for the wardrobe against 2.44 m for every wall,
+    in a 2.46 m room.
     """
     barrier = np.zeros(tuple(dims), dtype=bool)
     step = cfg.grid_m * 0.4
+    ceiling = planes.ceiling_height
+    floor_h = planes.floor_height
+    best_support = max((w.inlier_count for w in planes.walls), default=0)
     for wall, pts in zip(planes.walls, planes.wall_inliers, strict=False):
         if len(pts) < 20:
+            continue
+        if ceiling > 0:
+            top = float((pts @ up).max()) - floor_h
+            if top < ceiling - cfg.barrier_ceiling_gap_m:
+                continue  # furniture, not a wall
+        if best_support and wall.inlier_count < cfg.barrier_min_support * best_support:
+            # A minor plane that happens to reach the ceiling. On the furnished
+            # scene RANSAC produced one tilted 5 degrees off the real back wall
+            # with 5% of its support; drawn as a barrier it sliced the room
+            # diagonally and cost 41% of the wall length. A room *boundary* is
+            # one of the major planes, by construction.
             continue
         n3 = wall.normal
         n2 = np.array([n3 @ e0, n3 @ e1])
@@ -235,6 +263,7 @@ def _select_room(
     planes: PlaneSet,
     e0: np.ndarray,
     e1: np.ndarray,
+    up: np.ndarray,
     cams2d: np.ndarray | None,
 ) -> np.ndarray:
     """Isolate *this* room from everything visible through its doorways.
@@ -261,7 +290,7 @@ def _select_room(
     if cams2d is None or not len(cams2d) or not planes.walls:
         return occ
 
-    barrier = _wall_barrier(planes, lo, dims, cfg, e0, e1)
+    barrier = _wall_barrier(planes, lo, dims, cfg, e0, e1, up)
     if not barrier.any():
         return occ
 

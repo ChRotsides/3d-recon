@@ -346,6 +346,57 @@ side. Tests now assert per-room yaw as well as position. (The corridor house's
 rotation-invariant measurement remains correct: there the rooms *are* 180°
 symmetric, so a half-turn is a genuinely equivalent solution.)
 
+## 7h. Furniture is a vertical plane too
+
+The Phase-0 benchmark caught a regression that **168 unit tests missed**, which
+is the clearest argument yet for plan §8's "run the full set on every change and
+never stop".
+
+Room isolation (§7a) uses fitted walls as barriers so a flood fill cannot escape
+through a doorway. RANSAC finds *vertical planes* — and a wardrobe is a vertical
+plane. It was drawn as a barrier straight across the room, the fill stopped at
+it, and wall-length error on the two furnished scenes went to **41.6%**. Both
+had passed at 0.06% on the previous run.
+
+Two criteria are needed, and the first alone was not enough:
+
+1. **A wall reaches the ceiling.** Measured: 2.44 m for every real wall against
+   the wardrobe's 1.96 m, in a 2.46 m room. This excluded the wardrobe and *did
+   not fix it*.
+2. **A boundary is one of the major planes.** A spurious plane tilted 5° off the
+   back wall also reached the ceiling and sliced the room diagonally; it carried
+   5% of the largest wall's inliers.
+
+**Why the unit tests missed it.** The regression only appears at dense sampling
+— a sparse capture never resolves the wardrobe well enough for RANSAC to fit it
+as a plane. The unit suite ran at 160×120 with 54 keyframes; the benchmark runs
+at 240×180 with 90. `test_furniture_is_not_mistaken_for_a_room_boundary` now
+runs at the benchmark's density, and says so in the test.
+
+### What masking is now worth
+
+A second finding fell out of the same investigation. Before room isolation
+existed, an unmasked mirror-heavy scene meant **91% wall error and +52% area**.
+It no longer does: the flood fill from the camera track confines the footprint,
+so most of the phantom depth behind the mirrors never reaches the plan. That is
+robustness nobody designed for.
+
+But it is **not** reliable, and the numbers depend on the capture:
+
+| mirror_heavy, unmasked | wall error | Chamfer |
+|---|---|---|
+| benchmark scenes | 11.0% (still fails) | 0.124 m |
+| freshly rendered at the same density | passes | 0.124 m |
+
+The footprint sometimes survives and sometimes does not. **The Chamfer distance
+degrades either way** — 0.050 m masked against 0.124 m unmasked, consistently.
+
+So the test asserts on Chamfer, not on the floor plan: it is the measurement
+that holds regardless of how the flood fill happens to fall, and it is what a
+mesh or splat deliverable is actually made of. Asserting "unmasked must produce
+a wrong floor plan" would have been a test that passes or fails on sampling
+luck.
+
 ## 7c. SPZ is not verified byte-compatible
 
 `recon/io/export.py` implements the SPZ *scheme* from plan §3.7 — quantise,

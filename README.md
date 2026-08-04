@@ -4,8 +4,17 @@ Phone capture → cloud reconstruction → photorealistic walkthrough + dimensio
 floor plan. No LiDAR required.
 
 The approved architecture is [`room-scanner-implementation-plan.md`](room-scanner-implementation-plan.md).
-Deviations, decisions and live build status live in
-[`docs/execution-status.md`](docs/execution-status.md).
+
+- **[`docs/status-summary.md`](docs/status-summary.md)** — one page: what is done,
+  what is blocked, and on what.
+- [`docs/execution-status.md`](docs/execution-status.md) — deviations from the
+  plan and the reasoning behind each.
+- [`docs/licensing-audit.md`](docs/licensing-audit.md) — verified licences; three
+  findings change the plan.
+
+**Measured against the plan's §1.3 targets:** wall-length error 0.06–0.15%
+(target 1.5%), floor area 0.05–0.16% (target 3%), whole-house drift 12.6 cm over
+six rooms (target 15 cm). 188 tests green.
 
 ## Layout
 
@@ -21,10 +30,13 @@ harness/recon/       Phase-0 offline validation harness (Python)
   layout/              planes, Atlanta regularization, floor plan(plan §6.4)
   splat/               PGSR / 2DGS trainers on gsplat            (plan §3.3-3.4)
   eval/                metrics + benchmark grid                  (plan §8)
-core/                Shared Rust guidance core                   (plan §3.8, §6.1)
+  stitch/              room alignment, house pose graph          (plan §6.3)
+core/                Shared Rust guidance core + UniFFI          (plan §3.8, §6.1)
+server/              FastAPI reconstruction service              (plan §2, Phase 2)
+viewer/              Babylon.js walkthrough                      (plan §3.8)
 clients/ios          Swift + ARKit pose logger                   (plan task 3)
 clients/android      Kotlin + ARCore pose logger                 (plan task 3)
-docs/                Execution status, ADRs, licensing audit     (plan §10)
+docs/                Status, ADRs, licensing audit               (plan §10)
 ```
 
 ## Quick start
@@ -54,7 +66,14 @@ cd core && cargo test
 
 ## Status
 
-The GPU stages (DA3, MapAnything, SAM 3, PGSR) are implemented behind adapters
-but are **not validated** — the dev box has Kepler-era GPUs that PyTorch 2.x no
-longer supports. See [`docs/execution-status.md`](docs/execution-status.md) for
-what that means and what hardware unblocks it.
+Everything the plan calls for that can be built and verified **without a GPU, a
+phone or a Mac is built and verified**. What remains is hardware, not unwritten
+code:
+
+| Blocked on | What |
+|---|---|
+| a GPU | DA3 / MapAnything / SAM 3 / PGSR actually running |
+| a device | on-device DA3-Small, capture-time metrics |
+| a Mac | the iOS Xcode project |
+
+See [`docs/status-summary.md`](docs/status-summary.md).

@@ -19,7 +19,7 @@ hardware.
 | Blocked on a GPU | DA3 / MapAnything / SAM 3 / PGSR actually running |
 | Blocked on a device | on-device DA3-Small, capture-time metrics |
 | Blocked on a Mac | the iOS Xcode project |
-| Blocked on disk | cross-compiling the native libs (~1 GB free here) |
+
 
 ---
 
@@ -45,9 +45,9 @@ whether the *models* work on real rooms. That is what the GPU box is for.
 | Phase | State |
 |---|---|
 | 0 · offline harness | done — 5 scenes, exit criterion met |
-| 1 · capture client | Android builds and tests; iOS needs a Mac |
+| 1 · capture client | Android builds, tests, and calls the shared core; iOS needs a Mac |
 | 2 · cloud service | done — 19 tests, upload → reconstruct → download |
-| 3 · capture guidance | core done (20 tests) + UniFFI bindings; not yet driving the app UI |
+| 3 · capture guidance | core done (20 tests), driving the Android client; coverage and the AR ring await on-device depth |
 | 4 · metric layer & floor plan | done — meets the §1.3 accuracy targets |
 | 5 · multi-room stitching | done — both §6.3 paths |
 | 6 · export & polish | exports done; beta needs users |

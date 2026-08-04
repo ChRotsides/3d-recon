@@ -1,17 +1,21 @@
 """The two clients must not disagree with the shared core (ADR-0001).
 
-`core/` is the single source of truth for capture behaviour. Until the native
-library is cross-compiled and shipped in each app, both clients still carry
-their own copy of the keyframe rule — flagged as a stopgap in both files.
+`core/` is the single source of truth for capture behaviour.
 
-A stopgap with no guard is just duplication waiting to drift, and the failure is
-silent: iOS starts accepting keyframes at 12° while Android holds at 15°, both
-apps work, and Phase 0 reports a per-platform quality difference nobody can
-explain. This test reads the constants out of all three sources and asserts they
-agree, which needs no Rust toolchain, no NDK and no device — so it runs on every
-commit.
+**Android now calls it.** The native library is cross-compiled into the APK and
+`CaptureRecorder` reads its thresholds from `defaultParams()` over UniFFI, so
+there is nothing left to drift there — the checks below assert that it really
+does, rather than that a copy happens to match.
 
-Delete it when the clients call `defaultParams()` over UniFFI instead.
+**iOS does not yet**, because building it needs a Mac. It still carries its own
+copy of the keyframe rule, so the parity check remains for that one client. A
+stopgap with no guard is duplication waiting to drift, and the failure is
+silent: iOS accepting keyframes at 12° while the core says 15°, both apps
+working, and Phase 0 reporting a per-platform quality difference nobody can
+explain. Parsing the sources needs no Rust toolchain, no NDK and no device, so
+it runs on every commit.
+
+Delete the iOS half when that client calls `defaultParams()` too.
 """
 
 from __future__ import annotations
@@ -52,24 +56,6 @@ def _rust_defaults() -> dict[str, float]:
     return out
 
 
-def _kotlin_defaults() -> dict[str, float]:
-    text = KOTLIN.read_text()
-    block = re.search(r"data class Params\((.*?)\n\s*\)", text, re.S)
-    assert block, "could not find CaptureRecorder.Params in the Kotlin client"
-    out: dict[str, float] = {}
-    for name, expr in re.findall(r"val (\w+):\s*\w+\s*=\s*([^,\n]+)", block.group(1)):
-        expr = expr.strip()
-        deg = re.fullmatch(r"Math\.toRadians\(([\d.]+)\)\.toFloat\(\)", expr)
-        if deg:
-            out[name] = math.radians(float(deg.group(1)))
-            continue
-        try:
-            out[name] = float(expr.rstrip("f").rstrip("F"))
-        except ValueError:
-            continue
-    return out
-
-
 def _swift_defaults() -> dict[str, float]:
     text = SWIFT.read_text()
     block = re.search(r"struct Params \{(.*?)\n\s*\}", text, re.S)
@@ -89,50 +75,68 @@ def _swift_defaults() -> dict[str, float]:
 
 
 #: rust name -> (kotlin name, swift name)
+#: rust name -> swift name. Android is gone from this map because it now reads
+#: the values from the core instead of restating them.
 SHARED = {
-    "min_rotation_rad": ("minRotationRad", "minRotationRad"),
-    "min_translation_m": ("minTranslationM", "minTranslationM"),
-    "min_blur_score": ("minBlurScore", "minBlurScore"),
-    "max_exposure_clip_ratio": ("maxExposureClipRatio", "maxExposureClipRatio"),
-    "max_keyframes": ("maxKeyframes", "maxKeyframes"),
+    "min_rotation_rad": "minRotationRad",
+    "min_translation_m": "minTranslationM",
+    "min_blur_score": "minBlurScore",
+    "max_exposure_clip_ratio": "maxExposureClipRatio",
+    "max_keyframes": "maxKeyframes",
 }
 
 
 def test_the_parsers_find_something():
     """A regex that silently matches nothing would make every check below pass."""
-    for name, values in (("rust", _rust_defaults()), ("kotlin", _kotlin_defaults()),
-                         ("swift", _swift_defaults())):
+    for name, values in (("rust", _rust_defaults()), ("swift", _swift_defaults())):
         assert len(values) >= 4, f"{name} parser extracted only {values}"
 
 
 @pytest.mark.parametrize("rust_name", sorted(SHARED))
-def test_clients_agree_with_the_core(rust_name):
-    kotlin_name, swift_name = SHARED[rust_name]
+def test_ios_agrees_with_the_core(rust_name):
+    """iOS still hardcodes these. Until it calls the core, they must match."""
+    _rust, swift_name = rust_name, SHARED[rust_name]
     rust = _rust_defaults()
-    kotlin = _kotlin_defaults()
     swift = _swift_defaults()
 
     assert rust_name in rust, f"{rust_name} vanished from QualityParams::default()"
-    assert kotlin_name in kotlin, f"{kotlin_name} missing from the Android client"
     assert swift_name in swift, f"{swift_name} missing from the iOS client"
-
-    assert kotlin[kotlin_name] == pytest.approx(rust[rust_name], rel=1e-4), (
-        f"Android {kotlin_name}={kotlin[kotlin_name]} disagrees with core "
-        f"{rust_name}={rust[rust_name]}"
-    )
     assert swift[swift_name] == pytest.approx(rust[rust_name], rel=1e-4), (
         f"iOS {swift_name}={swift[swift_name]} disagrees with core "
         f"{rust_name}={rust[rust_name]}"
     )
 
 
+def test_android_reads_its_thresholds_from_the_core():
+    """The stronger property, now that Android calls UniFFI: it must have no
+    copy of its own to drift *from*."""
+    kt = KOTLIN.read_text()
+    assert "defaultParams()" in kt, "Android no longer reads the core's parameters"
+    for hardcoded in ("Math.toRadians(15.0)", "0.30f", "maxKeyframes: Int = 150"):
+        assert hardcoded not in kt, (
+            f"Android has re-introduced a hardcoded {hardcoded!r} instead of "
+            "using the core's value"
+        )
+    assert "core.maxKeyframes" in kt and "core.minTranslationM" in kt
+
+
+def test_android_ships_the_native_library():
+    """Bindings that compile but have no .so behind them throw at runtime, and
+    only on a device — the worst place to find out."""
+    jni = ROOT / "clients" / "android" / "app" / "src" / "main" / "jniLibs"
+    for abi in ("arm64-v8a", "armeabi-v7a"):
+        so = jni / abi / "librecon_core.so"
+        assert so.exists(), f"missing {abi} native library — run cargo ndk (core/README.md)"
+        assert so.stat().st_size > 100_000, f"{abi} library is suspiciously small"
+
+
 def test_the_keyframe_cap_matches_the_server_and_the_plan():
-    """PLAN §7 caps keyframes at 150 as a cost control. The clients, the core
-    and the server all enforce it, so all three have to say the same number."""
+    """PLAN §7 caps keyframes at 150 as a cost control. The core, iOS and the
+    server all enforce it, so all three have to say the same number. Android is
+    absent from this list on purpose — it reads the core's value."""
     from app.main import MAX_KEYFRAMES
 
     assert _rust_defaults()["max_keyframes"] == 150
-    assert _kotlin_defaults()["maxKeyframes"] == 150
     assert _swift_defaults()["maxKeyframes"] == 150
     assert MAX_KEYFRAMES == 150
 

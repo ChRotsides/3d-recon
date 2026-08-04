@@ -16,6 +16,7 @@ import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.UnavailableException
+import uniffi.recon_core.nagMessage
 import java.io.File
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -185,7 +186,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     }
                 )
                 if (rec != null) {
-                    append("  ·  ${rec.keyframeCount}/${rec.params.maxKeyframes} keyframes")
+                    append("  ·  ${rec.keyframeCount}/${rec.maxKeyframes} keyframes")
+                    // Guidance copy comes from the core so both platforms say
+                    // the same thing to the same user (plan §6.1).
+                    rec.lastGuidance?.nag?.let { append("\n${nagMessage(it)}") }
                     if (rec.rejected.isNotEmpty()) {
                         // Surfaced rather than hidden: a capture that is quietly
                         // rejecting every frame should look wrong, not idle.

@@ -17,6 +17,15 @@ import kotlin.math.min
 import kotlin.math.sqrt
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import uniffi.recon_core.FfiCaptureSession
+import uniffi.recon_core.FfiDecision
+import uniffi.recon_core.FfiFrame
+import uniffi.recon_core.FfiGuidance
+import uniffi.recon_core.FfiParams
+import uniffi.recon_core.FfiPose
+import uniffi.recon_core.FfiTracking
+import uniffi.recon_core.FfiVec3
+import uniffi.recon_core.defaultParams
 
 /**
  * The throwaway pose-logging capture app from plan task 3, Android side.
@@ -34,16 +43,39 @@ class CaptureRecorder(
     private val roomId: String = UUID.randomUUID().toString(),
 ) {
 
-    data class Params(
-        val minRotationRad: Float = Math.toRadians(15.0).toFloat(),
-        val minTranslationM: Float = 0.30f,
-        val minBlurScore: Double = 100.0,
-        val maxExposureClipRatio: Double = 0.25,
-        val maxKeyframes: Int = 150,
-        val targetWidth: Int = 960,
-    )
+    /**
+     * Capture thresholds, read from the shared Rust core (ADR-0001).
+     *
+     * These used to be hand-written constants duplicated here and in the iOS
+     * client, flagged as a stopgap in both. They now come from
+     * [uniffi.recon_core.defaultParams], so there is exactly one place where
+     * "15 degrees" is written down and the two platforms cannot disagree.
+     *
+     * `targetWidth` stays local: it is a client-side encoding choice about how
+     * much image to upload, not capture behaviour the core has an opinion on.
+     */
+    val core: FfiParams = defaultParams()
+    val targetWidth: Int = 960
 
-    val params = Params()
+    val maxKeyframes: Int get() = core.maxKeyframes.toInt()
+    private val minRotationRad: Float get() = Math.toRadians(core.minRotationDeg.toDouble()).toFloat()
+    private val minTranslationM: Float get() = core.minTranslationM
+
+    /**
+     * The core's own capture-session state machine, which owns the keyframe
+     * rule, the nag priorities and their cooldowns.
+     *
+     * Points and normals are passed empty for now: the on-device depth pass
+     * (DA3-Small via ExecuTorch, plan §3.6) does not exist yet, so there is no
+     * surface to integrate. The core handles that — with no geometry it still
+     * runs the quality gates and returns a decision, and simply reports no
+     * coverage and no next station.
+     */
+    private var guidance: FfiCaptureSession? = null
+
+    /** The most recent guidance, for the UI to draw. */
+    @Volatile var lastGuidance: FfiGuidance? = null
+        private set
     private val sessionId = UUID.randomUUID().toString()
     private val keyframes = mutableListOf<KeyframeWire>()
     private val sparsePoints = mutableListOf<SparsePointWire>()
@@ -65,13 +97,17 @@ class CaptureRecorder(
         sparsePoints.clear()
         rejected.clear()
         lastPose = null
+        lastGuidance = null
+        // Gravity as the world-frame down vector, per plan §5. ARCore is
+        // gravity-aligned, so this is -Y.
+        guidance = FfiCaptureSession(FfiVec3(0.0f, -1.0f, 0.0f))
         recording = true
     }
 
     /** Call once per ARCore frame. Cheap gates run before any image work. */
     fun onFrame(frame: Frame) {
         if (!recording) return
-        if (keyframes.size >= params.maxKeyframes) {
+        if (keyframes.size >= maxKeyframes) {
             bump("cap_reached")
             return
         }
@@ -83,10 +119,13 @@ class CaptureRecorder(
 
         val matrix = FloatArray(16)
         camera.pose.toMatrix(matrix, 0)
+        // Cheap pre-filter before decoding an image. The core makes the real
+        // decision below; this only avoids the cost of a YUV copy for frames
+        // that obviously cannot qualify.
         lastPose?.let { prev ->
             val moved = translationDistance(prev, matrix)
             val rotated = rotationAngle(prev, matrix)
-            if (moved < params.minTranslationM && rotated < params.minRotationRad) return
+            if (moved < minTranslationM && rotated < minRotationRad) return
         }
 
         val image: Image = try {
@@ -99,24 +138,48 @@ class CaptureRecorder(
         try {
             val gray = luminancePlane(image) ?: run { bump("decode"); return }
             val blur = varianceOfLaplacian(gray.pixels, gray.width, gray.height)
-            if (blur < params.minBlurScore) {
-                bump("blur")
-                return
-            }
             val clip = exposureClipRatio(gray.pixels)
-            if (clip > params.maxExposureClipRatio) {
-                bump("exposure")
+
+            // The core decides. Blur and exposure are measured here because
+            // only the client has the pixels, but the thresholds and the
+            // priority ordering live in one place for both platforms.
+            val pose = FrameConversion.fromArCore(camera.pose)
+            val update = guidance?.observe(
+                FfiFrame(
+                    timestampS = frame.timestamp / 1e9,
+                    pose = FfiPose(
+                        r = pose.R.flatten().map { it.toFloat() },
+                        t = FfiVec3(
+                            pose.t[0].toFloat(), pose.t[1].toFloat(), pose.t[2].toFloat()
+                        ),
+                    ),
+                    tracking = FfiTracking.NORMAL,
+                    blurScore = blur.toFloat(),
+                    exposureClipRatio = clip.toFloat(),
+                    // No on-device depth yet, so no median-depth reading. The
+                    // core treats 0 as "unknown" and skips the TOO_CLOSE nag.
+                    medianDepthM = 0.0f,
+                    angularVelocityRadS = lastPose?.let { rotationAngle(it, matrix) } ?: 0.0f,
+                    sparsePointCount = sparsePointsInView(frame),
+                    lux = frame.lightEstimate?.pixelIntensity?.times(1000f) ?: 200.0f,
+                ),
+                emptyList(),
+                emptyList(),
+            )
+            lastGuidance = update
+
+            if (update != null && update.decision != FfiDecision.ACCEPT) {
+                bump(update.decision.name.removePrefix("REJECT_").lowercase())
                 return
             }
 
-            val bitmap = toBitmap(image, params.targetWidth) ?: run { bump("encode"); return }
+            val bitmap = toBitmap(image, targetWidth) ?: run { bump("encode"); return }
             val id = "kf_%04d".format(keyframes.size)
             val rel = "images/$id.jpg"
             File(bundleDir, rel).outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 92, it)
             }
 
-            val pose = FrameConversion.fromArCore(camera.pose)
             keyframes += KeyframeWire(
                 id = id,
                 image = rel,
@@ -155,6 +218,14 @@ class CaptureRecorder(
         }
     }
 
+    /** How many AR feature points fall in view — the core's texture signal. */
+    private fun sparsePointsInView(frame: Frame): UInt =
+        try {
+            frame.acquirePointCloud().use { (it.points.remaining() / 4).toUInt() }
+        } catch (e: Exception) {
+            0u
+        }
+
     /** One tape measure per room (plan §6.2). */
     fun addTapeMeasure(a: FloatArray, b: FloatArray, measuredMeters: Double) {
         measurements += ReferenceMeasurementWire(
@@ -168,6 +239,8 @@ class CaptureRecorder(
 
     fun stop(): File {
         recording = false
+        guidance?.destroy()
+        guidance = null
         val bundle = SessionBundleWire(
             sessionId = sessionId,
             device = DeviceInfo(

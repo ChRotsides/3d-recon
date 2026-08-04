@@ -153,7 +153,7 @@ Found while building; all verified. See [`licensing-audit.md`](licensing-audit.m
 | Automatic doorway pairing | **unreliable** | see §7d |
 | Walkthrough viewer (§3.8) | done | 11 tests |
 | Continuous tracking (§6.3 path A) | done | 15 tests, mutation-checked |
-| UniFFI bindings (ADR-0001) | done | Android compiles against them |
+| UniFFI bindings (ADR-0001) | done | Android **calls** the core; libs in the APK |
 | Android pose logger | **builds** | APK + 6 JVM tests |
 | DA3 / MapAnything / SAM 3 adapters | written | ❌ needs GPU |
 | PGSR clean-room trainer | **not written** | see §6 |
@@ -492,19 +492,31 @@ Verified here:
 * **the Android app compiles against the generated Kotlin** (`:app:compileDebugKotlin`
   → BUILD SUCCESSFUL) and its unit tests still pass.
 
-**Not** verified: the native `.so`/`.xcframework` are not cross-compiled, so
-nothing has *called* the core from a client at runtime. Each Rust target
-toolchain is a couple of hundred megabytes and this box has ~1 GB of disk free.
-`core/README.md` has the `cargo-ndk` commands.
+**Android now calls the core at runtime.** Once the disk was reclaimed (§7i),
+the native library was cross-compiled and the client rewired:
 
-Until the clients call `defaultParams()` over the bindings, the duplicated
-constants remain — but they are now **guarded**. `test_client_core_parity.py`
-parses the thresholds out of the Rust, Kotlin and Swift sources and asserts they
-agree, needing no Rust toolchain, no NDK and no device. Mutation-checked:
-drifting Android to 12° or the iOS keyframe cap to 200 each fail exactly the
-test written for them. The silent failure it prevents is iOS accepting keyframes
-at 12° while Android holds at 15° — both apps work, and Phase 0 reports a
-per-platform quality difference nobody can explain.
+* `cargo ndk` builds `librecon_core.so` for `arm64-v8a` (614 KB) and
+  `armeabi-v7a` (443 KB); both are in the APK, verified by unzipping it;
+* `CaptureRecorder` reads its thresholds from `defaultParams()` — there is no
+  longer a Kotlin copy of "15 degrees" to drift from;
+* the keyframe decision comes from `FfiCaptureSession.observe()`, so the core
+  owns the rule, the nag priorities and their cooldowns;
+* the nag *copy* comes from `nagMessage()`, so the two platforms cannot word
+  capture guidance differently to the same user.
+
+Depth is passed empty: the on-device DA3-Small pass (§3.6) does not exist yet,
+so there is no surface to integrate. The core handles that — with no geometry it
+still runs the quality gates and returns a decision, and reports no coverage and
+no next station. Coverage and the AR floor ring light up when depth lands.
+
+**iOS still hardcodes its constants**, because building it needs a Mac, so the
+parity check remains for that one client — `test_client_core_parity.py` parses
+the thresholds out of the Rust and Swift sources and asserts they agree. It was
+mutation-checked while it still covered Android: drifting a value fails exactly
+the test written for it. Two stronger checks replaced the Android half — that
+the Kotlin client has no hardcoded thresholds *to* drift, and that the native
+libraries are actually present, since bindings with no `.so` behind them throw
+at runtime on a device, which is the worst place to find out.
 
 ## 8. Next
 

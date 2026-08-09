@@ -64,6 +64,13 @@ class TrackingState(str, Enum):
     RELOCALIZING = "relocalizing"
 
 
+class CaptureMode(str, Enum):
+    UNKNOWN = "unknown"
+    ARCORE_DEPTH = "arcore_depth"
+    RGB_ONLY = "rgb_only"
+    SYNTHETIC_DEPTH = "synthetic_depth"
+
+
 class Device(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -206,6 +213,37 @@ class Doorway(BaseModel):
     height_m: float = 0.0
 
 
+class ShotHeight(str, Enum):
+    """Where in the room a scripted shot was aimed."""
+
+    BOTTOM = "bottom"
+    MIDDLE = "middle"
+    TOP = "top"
+
+
+class SkippedShot(BaseModel):
+    """A scripted shot the user reported as unobtainable.
+
+    Recorded because "nobody could reach this direction" and "the script never
+    asked for this direction" imply different things about a room, and the
+    validator has to be able to tell them apart. A capture that skipped its way
+    to the end otherwise presents exactly like a complete one.
+
+    Yaw is degrees relative to the capture's starting heading, matching the
+    core's own convention: the room's orientation is unknown when the script is
+    built, so a world-frame angle here would be invented precision.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    yaw_deg: float
+    height: ShotHeight
+    #: True when the shot was asked for from a solver-chosen station rather
+    #: than the centre pass — a skipped station shot costs baseline, which is
+    #: harder to make up than a missing direction from the centre.
+    at_station: bool = False
+
+
 class SessionBundle(BaseModel):
     """Client -> server payload. One room, one capture session."""
 
@@ -216,11 +254,19 @@ class SessionBundle(BaseModel):
     room_id: str
     #: World-frame down vector (unit, points toward the floor).
     gravity: Vec3 = [0.0, -1.0, 0.0]
+    #: Explicit acquisition contract. UNKNOWN is accepted for legacy bundles only.
+    capture_mode: CaptureMode = CaptureMode.UNKNOWN
+    #: Optional 16-bit PNG captured before a depth-mode recording was allowed to start.
+    depth_self_test: str | None = None
+    depth_frame_count: int = Field(default=0, ge=0)
     frame: CoordinateFrame = Field(default_factory=CoordinateFrame)
     keyframes: list[Keyframe] = Field(default_factory=list)
     sparse_points: list[SparsePoint] = Field(default_factory=list)
     reference_measurements: list[ReferenceMeasurement] = Field(default_factory=list)
     doorways: list[Doorway] = Field(default_factory=list)
+    #: Shots the user could not obtain. Empty on a capture that got everything,
+    #: and on any client that does not run a scripted capture.
+    skipped_shots: list[SkippedShot] = Field(default_factory=list)
     schema_version: int = 1
 
     @field_validator("gravity")
@@ -352,6 +398,8 @@ class RoomLayout(BaseModel):
     area_m2: float
     perimeter_m: float
     wall_lengths_m: list[float]
+    #: 95th-percentile distance from the raw floor contour to the simplified footprint.
+    footprint_fit_error_m: float = 0.0
     planes: list[Plane] = Field(default_factory=list)
     openings: list[Opening] = Field(default_factory=list)
     scale_applied: float = 1.0

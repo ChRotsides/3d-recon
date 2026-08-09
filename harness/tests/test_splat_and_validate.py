@@ -9,7 +9,15 @@ from recon.depth.base import GroundTruthDepth
 from recon.io.bundle import BundleDir
 from recon.io.validate import validate_bundle
 from recon.masking.base import GroundTruthMasker
-from recon.schemas import Intrinsics, Keyframe, Pose, SessionBundle
+from recon.schemas import (
+    CaptureMode,
+    Intrinsics,
+    Keyframe,
+    Pose,
+    SessionBundle,
+    SkippedShot,
+    TrackingState,
+)
 from recon.splat.base import holdout_split, seed_points_from_depth
 from recon.splat.pgsr import PGSRTrainer, _mat_to_quat_wxyz
 
@@ -158,6 +166,132 @@ def test_validator_requires_the_vio_prior(tmp_path):
     (tmp_path / "bundle.json").write_text(b.model_dump_json())
     rep = validate_bundle(tmp_path)
     assert any("VIO scale prior" in e for e in rep.errors), rep.errors
+
+
+def test_validator_rejects_a_tagged_tracking_break(scene, tmp_path):
+    import copy
+
+    bundle = copy.deepcopy(scene.bundle)
+    bundle.keyframes[len(bundle.keyframes) // 2].tracking_state = TrackingState.RELOCALIZING
+    (tmp_path / "bundle.json").write_text(bundle.model_dump_json())
+    (tmp_path / "images").mkdir()
+    for kf in bundle.keyframes:
+        (tmp_path / kf.image).write_bytes(b"")
+
+    rep = validate_bundle(tmp_path)
+    assert any("tracking discontinuities" in error for error in rep.errors), rep.errors
+
+
+def test_validator_separates_schema_valid_from_depth_reconstruction_ready(scene):
+    import copy
+
+    bundle = copy.deepcopy(scene.bundle)
+    bundle.capture_mode = CaptureMode.ARCORE_DEPTH
+    rep_root = scene.root
+    (rep_root / "bundle.json").write_text(bundle.model_dump_json())
+
+    rep = validate_bundle(rep_root)
+
+    assert rep.schema_valid
+    assert not rep.reconstruction_ready
+    assert any("startup depth self-test" in error for error in rep.errors)
+
+
+def test_validator_labels_the_explicit_rgb_only_path(scene):
+    import copy
+
+    bundle = copy.deepcopy(scene.bundle)
+    bundle.capture_mode = CaptureMode.RGB_ONLY
+    (scene.root / "bundle.json").write_text(bundle.model_dump_json())
+
+    rep = validate_bundle(scene.root)
+
+    assert rep.schema_valid
+    assert any("explicitly RGB-only" in warning for warning in rep.warnings)
+
+
+def _write(bundle: SessionBundle, root):
+    """Persist a bundle plus placeholder images so the validator can read it."""
+    (root / "bundle.json").write_text(bundle.model_dump_json())
+    (root / "images").mkdir(exist_ok=True)
+    for kf in bundle.keyframes:
+        (root / kf.image).parent.mkdir(parents=True, exist_ok=True)
+        (root / kf.image).write_bytes(b"")
+    return root
+
+
+def _tilt(bundle: SessionBundle, n: int, pitch_deg: float) -> None:
+    """Aim the first `n` keyframes `pitch_deg` above the horizon, fanned in yaw.
+
+    Fanned rather than parallel so the frames land in distinct yaw sectors:
+    the failure being reproduced is precisely a handful of frames spread thin
+    enough to satisfy a sector count.
+    """
+    p = np.radians(pitch_deg)
+    for i, kf in enumerate(bundle.keyframes[:n]):
+        y = 2.0 * np.pi * i / max(n, 1)
+        # world<-camera with the camera looking down -Z.
+        fwd = np.array([np.cos(p) * np.sin(y), np.sin(p), -np.cos(p) * np.cos(y)])
+        right = np.cross(fwd, [0.0, 1.0, 0.0])
+        right /= max(np.linalg.norm(right), 1e-9)
+        up = np.cross(right, fwd)
+        kf.pose = Pose(R=np.column_stack([right, up, -fwd]).tolist(), t=kf.pose.t)
+
+
+def test_validator_rejects_a_ceiling_seen_only_by_stray_frames(scene, tmp_path):
+    """The hole a real capture went through.
+
+    bundle_5af1214c aimed 8 of its 150 frames between 10 and 22 degrees up.
+    Those 8 painted 8 of 12 yaw sectors, cleared a gate that asked for 4, and
+    the reconstruction then fitted a tabletop as the room's ceiling. Sector
+    spread without density is not evidence, and 10 degrees is not a ceiling
+    shot: from 1.5 m the centre ray meets a 2.5 m ceiling 5.7 m away.
+    """
+    import copy
+
+    bundle = copy.deepcopy(scene.bundle)
+    bundle.capture_mode = CaptureMode.RGB_ONLY
+    _tilt(bundle, 8, 15.0)
+    rep = validate_bundle(_write(bundle, tmp_path))
+
+    assert not rep.reconstruction_ready
+    assert any("ceiling" in e for e in rep.errors), rep.errors
+
+
+def test_validator_records_skipped_shots_without_failing_the_capture(scene, tmp_path):
+    """Some corners genuinely cannot be shot; that is a fact, not a fault.
+
+    It must still be *visible*, because every skip is a direction the
+    reconstruction will be guessing at.
+    """
+    import copy
+
+    bundle = copy.deepcopy(scene.bundle)
+    bundle.skipped_shots = [
+        SkippedShot(yaw_deg=45.0, height="middle", at_station=False),
+        SkippedShot(yaw_deg=90.0, height="bottom", at_station=True),
+    ]
+    rep = validate_bundle(_write(bundle, tmp_path))
+
+    assert rep.ok, rep.errors
+    assert rep.stats["skipped_shots"] == 2
+    assert any("unobtainable" in w for w in rep.warnings), rep.warnings
+    assert any("baseline" in w for w in rep.warnings), rep.warnings
+
+
+def test_validator_fails_a_capture_that_skipped_most_of_the_ceiling(scene, tmp_path):
+    """Ceiling height is only ever measured — the footprint cannot imply it,
+    the way it constrains the floor and walls."""
+    import copy
+
+    bundle = copy.deepcopy(scene.bundle)
+    bundle.skipped_shots = [
+        SkippedShot(yaw_deg=45.0 * i, height="top", at_station=False) for i in range(5)
+    ]
+    rep = validate_bundle(_write(bundle, tmp_path))
+
+    assert not rep.ok
+    assert any("ceiling height cannot be measured" in e for e in rep.errors), rep.errors
 
 
 def test_validator_catches_a_units_mistake_in_the_tape_measure(scene):

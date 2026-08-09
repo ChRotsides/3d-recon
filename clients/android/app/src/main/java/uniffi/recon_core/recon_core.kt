@@ -728,6 +728,30 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -753,17 +777,41 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_recon_core_fn_constructor_fficapturesession_new(`gravity`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_recon_core_fn_method_fficapturesession_capture_now(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_recon_core_fn_method_fficapturesession_coverage_cloud(`ptr`: Pointer,`targetPoints`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_recon_core_fn_method_fficapturesession_flush(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_recon_core_fn_method_fficapturesession_has_candidate(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     fun uniffi_recon_core_fn_method_fficapturesession_last_known_good_position(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_recon_core_fn_method_fficapturesession_observe(`ptr`: Pointer,`frame`: RustBuffer.ByValue,`points`: RustBuffer.ByValue,`normals`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_recon_core_fn_method_fficapturesession_on_relocalised(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_recon_core_fn_method_fficapturesession_recovery(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_recon_core_fn_method_fficapturesession_set_floor_height(`ptr`: Pointer,`y`: Float,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_recon_core_fn_method_fficapturesession_set_heading(`ptr`: Pointer,`degrees`: Float,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_recon_core_fn_method_fficapturesession_skip_shot(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_recon_core_fn_method_fficapturesession_skipped_shots(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_recon_core_fn_method_fficapturesession_start_script(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_recon_core_fn_func_decision_accepted(`decision`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_recon_core_fn_func_decision_message(`decision`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_recon_core_fn_func_default_params(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_recon_core_fn_func_nag_message(`nag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_recon_core_fn_func_recovery_message(`recovery`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_recon_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -877,9 +925,23 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_recon_core_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_recon_core_checksum_func_decision_accepted(
+    ): Short
+    fun uniffi_recon_core_checksum_func_decision_message(
+    ): Short
     fun uniffi_recon_core_checksum_func_default_params(
     ): Short
     fun uniffi_recon_core_checksum_func_nag_message(
+    ): Short
+    fun uniffi_recon_core_checksum_func_recovery_message(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_capture_now(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_coverage_cloud(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_flush(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_has_candidate(
     ): Short
     fun uniffi_recon_core_checksum_method_fficapturesession_last_known_good_position(
     ): Short
@@ -887,7 +949,17 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_recon_core_checksum_method_fficapturesession_on_relocalised(
     ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_recovery(
+    ): Short
     fun uniffi_recon_core_checksum_method_fficapturesession_set_floor_height(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_set_heading(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_skip_shot(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_skipped_shots(
+    ): Short
+    fun uniffi_recon_core_checksum_method_fficapturesession_start_script(
     ): Short
     fun uniffi_recon_core_checksum_constructor_fficapturesession_new(
     ): Short
@@ -908,10 +980,31 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_recon_core_checksum_func_decision_accepted() != 55155.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_func_decision_message() != 37777.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_recon_core_checksum_func_default_params() != 14609.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_recon_core_checksum_func_nag_message() != 54813.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_func_recovery_message() != 16024.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_capture_now() != 54950.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_coverage_cloud() != 42394.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_flush() != 17954.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_has_candidate() != 54334.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_recon_core_checksum_method_fficapturesession_last_known_good_position() != 43787.toShort()) {
@@ -923,7 +1016,22 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_recon_core_checksum_method_fficapturesession_on_relocalised() != 31436.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_recovery() != 4456.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_recon_core_checksum_method_fficapturesession_set_floor_height() != 45994.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_set_heading() != 39906.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_skip_shot() != 4892.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_skipped_shots() != 50714.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_recon_core_checksum_method_fficapturesession_start_script() != 49549.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_recon_core_checksum_constructor_fficapturesession_new() != 22230.toShort()) {
@@ -1294,6 +1402,49 @@ private class JavaLangRefCleanable(
 public interface FfiCaptureSessionInterface {
     
     /**
+     * Take the picture. Returns the pose of the frame written, so the client
+     * knows which of the images it is holding to save, or null when the
+     * camera has nothing usable to offer right now.
+     *
+     * Nothing vetoes this: the user can see the scene and the marker, and a
+     * shutter that refuses a deliberate press is the worst thing a capture
+     * app can do.
+     */
+    fun `captureNow`(): FfiPose?
+    
+    /**
+     * The coverage grid as points the client can draw over the real surfaces.
+     *
+     * A capture where the user cannot see what has been mapped is one where
+     * they find out what they missed after they have left the room, so this
+     * exists to be drawn rather than logged.
+     *
+     * Subsampling above `target_points` is by a hash of the voxel key, not by
+     * iteration order or reservoir sampling: a `HashMap` yields its entries in
+     * an arbitrary order that changes as it grows, so taking the first N would
+     * redraw a *different* subset every frame and the overlay would boil. A key
+     * hash keeps the chosen subset stable as long as the stride is, so points
+     * stay put and only thin out as the room grows.
+     *
+     * `target_points` is therefore a budget, not a hard cap — a hash-modulo
+     * keeps *about* that many, varying by a few percent either way. Trading the
+     * exact count for a stable subset is the whole point; a caller sizing a
+     * buffer should read the returned length rather than assume the budget.
+     */
+    fun `coverageCloud`(`targetPoints`: kotlin.UInt): FfiCoverageCloud
+    
+    /**
+     * Commit the candidate still held, at the end of a capture. Returns true
+     * when the client should write the image it is holding.
+     */
+    fun `flush`(): kotlin.Boolean
+    
+    /**
+     * Whether a frame is ready to be taken, for the shutter button's state.
+     */
+    fun `hasCandidate`(): kotlin.Boolean
+    
+    /**
      * Where to send a user who has lost tracking (PLAN.md §6.1).
      */
     fun `lastKnownGoodPosition`(): FfiVec3?
@@ -1314,10 +1465,46 @@ public interface FfiCaptureSessionInterface {
     fun `onRelocalised`()
     
     /**
+     * Where to go to get tracking back, or `None` before the first keyframe.
+     */
+    fun `recovery`(): FfiRecovery?
+    
+    /**
      * The floor height from ARKit/ARCore plane detection. Better than
      * inferring it, and available before any depth has run.
      */
     fun `setFloorHeight`(`y`: kotlin.Float)
+    
+    /**
+     * Compass heading for this frame, degrees clockwise from magnetic north.
+     *
+     * Fed separately from `observe` because it arrives on the sensor's
+     * schedule rather than the camera's, and because a device without a
+     * usable magnetometer simply never calls it.
+     */
+    fun `setHeading`(`degrees`: kotlin.Float)
+    
+    /**
+     * The user cannot get the shot being asked for; move on to the next.
+     *
+     * Returns the abandoned shot so the client can write it into the bundle,
+     * or `None` if the script had already finished — the button is live for
+     * as long as the capture is, and the last shot can land in between.
+     */
+    fun `skipShot`(): FfiSkippedShot?
+    
+    /**
+     * Every shot given up on so far, for the bundle written at the end.
+     */
+    fun `skippedShots`(): List<FfiSkippedShot>
+    
+    /**
+     * Switch this session to a scripted capture (aim, hold, shoot).
+     *
+     * Takes effect on the next frame, whose heading becomes the script's yaw
+     * origin — so call it when the user is standing where they mean to start.
+     */
+    fun `startScript`()
     
     companion object
 }
@@ -1419,6 +1606,89 @@ open class FfiCaptureSession: Disposable, AutoCloseable, FfiCaptureSessionInterf
 
     
     /**
+     * Take the picture. Returns the pose of the frame written, so the client
+     * knows which of the images it is holding to save, or null when the
+     * camera has nothing usable to offer right now.
+     *
+     * Nothing vetoes this: the user can see the scene and the marker, and a
+     * shutter that refuses a deliberate press is the worst thing a capture
+     * app can do.
+     */override fun `captureNow`(): FfiPose? {
+            return FfiConverterOptionalTypeFfiPose.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_capture_now(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The coverage grid as points the client can draw over the real surfaces.
+     *
+     * A capture where the user cannot see what has been mapped is one where
+     * they find out what they missed after they have left the room, so this
+     * exists to be drawn rather than logged.
+     *
+     * Subsampling above `target_points` is by a hash of the voxel key, not by
+     * iteration order or reservoir sampling: a `HashMap` yields its entries in
+     * an arbitrary order that changes as it grows, so taking the first N would
+     * redraw a *different* subset every frame and the overlay would boil. A key
+     * hash keeps the chosen subset stable as long as the stride is, so points
+     * stay put and only thin out as the room grows.
+     *
+     * `target_points` is therefore a budget, not a hard cap — a hash-modulo
+     * keeps *about* that many, varying by a few percent either way. Trading the
+     * exact count for a stable subset is the whole point; a caller sizing a
+     * buffer should read the returned length rather than assume the budget.
+     */override fun `coverageCloud`(`targetPoints`: kotlin.UInt): FfiCoverageCloud {
+            return FfiConverterTypeFfiCoverageCloud.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_coverage_cloud(
+        it, FfiConverterUInt.lower(`targetPoints`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Commit the candidate still held, at the end of a capture. Returns true
+     * when the client should write the image it is holding.
+     */override fun `flush`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_flush(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Whether a frame is ready to be taken, for the shutter button's state.
+     */override fun `hasCandidate`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_has_candidate(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Where to send a user who has lost tracking (PLAN.md §6.1).
      */override fun `lastKnownGoodPosition`(): FfiVec3? {
             return FfiConverterOptionalTypeFfiVec3.lift(
@@ -1469,6 +1739,21 @@ open class FfiCaptureSession: Disposable, AutoCloseable, FfiCaptureSessionInterf
 
     
     /**
+     * Where to go to get tracking back, or `None` before the first keyframe.
+     */override fun `recovery`(): FfiRecovery? {
+            return FfiConverterOptionalTypeFfiRecovery.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_recovery(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * The floor height from ARKit/ARCore plane detection. Better than
      * inferring it, and available before any depth has run.
      */override fun `setFloorHeight`(`y`: kotlin.Float)
@@ -1477,6 +1762,75 @@ open class FfiCaptureSession: Disposable, AutoCloseable, FfiCaptureSessionInterf
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_set_floor_height(
         it, FfiConverterFloat.lower(`y`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Compass heading for this frame, degrees clockwise from magnetic north.
+     *
+     * Fed separately from `observe` because it arrives on the sensor's
+     * schedule rather than the camera's, and because a device without a
+     * usable magnetometer simply never calls it.
+     */override fun `setHeading`(`degrees`: kotlin.Float)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_set_heading(
+        it, FfiConverterFloat.lower(`degrees`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * The user cannot get the shot being asked for; move on to the next.
+     *
+     * Returns the abandoned shot so the client can write it into the bundle,
+     * or `None` if the script had already finished — the button is live for
+     * as long as the capture is, and the last shot can land in between.
+     */override fun `skipShot`(): FfiSkippedShot? {
+            return FfiConverterOptionalTypeFfiSkippedShot.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_skip_shot(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Every shot given up on so far, for the bundle written at the end.
+     */override fun `skippedShots`(): List<FfiSkippedShot> {
+            return FfiConverterSequenceTypeFfiSkippedShot.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_skipped_shots(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Switch this session to a scripted capture (aim, hold, shoot).
+     *
+     * Takes effect on the next frame, whose heading becomes the script's yaw
+     * origin — so call it when the user is standing where they mean to start.
+     */override fun `startScript`()
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_method_fficapturesession_start_script(
+        it, _status)
 }
     }
     
@@ -1515,6 +1869,60 @@ public object FfiConverterTypeFfiCaptureSession: FfiConverter<FfiCaptureSession,
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+/**
+ * A drawable snapshot of the coverage grid (plan §6.1).
+ *
+ * Flat arrays rather than a vector of records for the same reason `observe`
+ * takes them: this crosses the FFI boundary several times a second with
+ * thousands of entries, and UniFFI copies every record.
+ */
+data class FfiCoverageCloud (
+    /**
+     * Voxel centres as flat xyz triples, world frame.
+     */
+    var `points`: List<kotlin.Float>, 
+    /**
+     * Per voxel, `quality / q_min` clamped to 0..1 — 1.0 has cleared the bar.
+     * This is what the client colours by, so a user can see which surfaces are
+     * merely *seen* and which are actually *done*.
+     */
+    var `fill`: List<kotlin.Float>, 
+    /**
+     * Voxels in the grid before subsampling, so the client can say so.
+     */
+    var `total`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiCoverageCloud: FfiConverterRustBuffer<FfiCoverageCloud> {
+    override fun read(buf: ByteBuffer): FfiCoverageCloud {
+        return FfiCoverageCloud(
+            FfiConverterSequenceFloat.read(buf),
+            FfiConverterSequenceFloat.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiCoverageCloud) = (
+            FfiConverterSequenceFloat.allocationSize(value.`points`) +
+            FfiConverterSequenceFloat.allocationSize(value.`fill`) +
+            FfiConverterUInt.allocationSize(value.`total`)
+    )
+
+    override fun write(value: FfiCoverageCloud, buf: ByteBuffer) {
+            FfiConverterSequenceFloat.write(value.`points`, buf)
+            FfiConverterSequenceFloat.write(value.`fill`, buf)
+            FfiConverterUInt.write(value.`total`, buf)
     }
 }
 
@@ -1582,6 +1990,24 @@ public object FfiConverterTypeFfiFrame: FfiConverterRustBuffer<FfiFrame> {
 
 data class FfiGuidance (
     var `decision`: FfiDecision, 
+    /**
+     * Retain this frame's image: it is the best candidate for the current
+     * viewpoint so far. The core never sees pixels, so the client is told
+     * which frame to keep rather than handing frames in.
+     */
+    var `hold`: kotlin.Boolean, 
+    /**
+     * Write the retained image as a keyframe now, using [`Self::commit_pose`].
+     *
+     * This refers to an *earlier* frame than the one just offered — the one
+     * the client was holding — so the pose travels with the instruction
+     * rather than being taken from the current frame.
+     */
+    var `commitHeld`: kotlin.Boolean, 
+    /**
+     * Pose of the frame being committed, world<-camera.
+     */
+    var `commitPose`: FfiPose?, 
     var `nag`: FfiNag?, 
     /**
      * Where to draw the AR floor ring, if anywhere.
@@ -1591,7 +2017,11 @@ data class FfiGuidance (
     var `wallCoverage`: kotlin.Float, 
     var `ceilingCoverage`: kotlin.Float, 
     var `complete`: kotlin.Boolean, 
-    var `keyframes`: kotlin.UInt
+    var `keyframes`: kotlin.UInt, 
+    /**
+     * Set while a scripted capture is running.
+     */
+    var `shot`: FfiShot?
 ) {
     
     companion object
@@ -1604,6 +2034,9 @@ public object FfiConverterTypeFfiGuidance: FfiConverterRustBuffer<FfiGuidance> {
     override fun read(buf: ByteBuffer): FfiGuidance {
         return FfiGuidance(
             FfiConverterTypeFfiDecision.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeFfiPose.read(buf),
             FfiConverterOptionalTypeFfiNag.read(buf),
             FfiConverterOptionalTypeFfiStation.read(buf),
             FfiConverterFloat.read(buf),
@@ -1611,22 +2044,30 @@ public object FfiConverterTypeFfiGuidance: FfiConverterRustBuffer<FfiGuidance> {
             FfiConverterFloat.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterOptionalTypeFfiShot.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiGuidance) = (
             FfiConverterTypeFfiDecision.allocationSize(value.`decision`) +
+            FfiConverterBoolean.allocationSize(value.`hold`) +
+            FfiConverterBoolean.allocationSize(value.`commitHeld`) +
+            FfiConverterOptionalTypeFfiPose.allocationSize(value.`commitPose`) +
             FfiConverterOptionalTypeFfiNag.allocationSize(value.`nag`) +
             FfiConverterOptionalTypeFfiStation.allocationSize(value.`station`) +
             FfiConverterFloat.allocationSize(value.`floorCoverage`) +
             FfiConverterFloat.allocationSize(value.`wallCoverage`) +
             FfiConverterFloat.allocationSize(value.`ceilingCoverage`) +
             FfiConverterBoolean.allocationSize(value.`complete`) +
-            FfiConverterUInt.allocationSize(value.`keyframes`)
+            FfiConverterUInt.allocationSize(value.`keyframes`) +
+            FfiConverterOptionalTypeFfiShot.allocationSize(value.`shot`)
     )
 
     override fun write(value: FfiGuidance, buf: ByteBuffer) {
             FfiConverterTypeFfiDecision.write(value.`decision`, buf)
+            FfiConverterBoolean.write(value.`hold`, buf)
+            FfiConverterBoolean.write(value.`commitHeld`, buf)
+            FfiConverterOptionalTypeFfiPose.write(value.`commitPose`, buf)
             FfiConverterOptionalTypeFfiNag.write(value.`nag`, buf)
             FfiConverterOptionalTypeFfiStation.write(value.`station`, buf)
             FfiConverterFloat.write(value.`floorCoverage`, buf)
@@ -1634,6 +2075,7 @@ public object FfiConverterTypeFfiGuidance: FfiConverterRustBuffer<FfiGuidance> {
             FfiConverterFloat.write(value.`ceilingCoverage`, buf)
             FfiConverterBoolean.write(value.`complete`, buf)
             FfiConverterUInt.write(value.`keyframes`, buf)
+            FfiConverterOptionalTypeFfiShot.write(value.`shot`, buf)
     }
 }
 
@@ -1746,6 +2188,165 @@ public object FfiConverterTypeFfiPose: FfiConverterRustBuffer<FfiPose> {
 
 
 
+/**
+ * Where to go, and which way to turn, to get tracking back.
+ */
+data class FfiRecovery (
+    /**
+     * Last good camera position, ARCore world frame. Only drawable while
+     * ARCore's world is still valid — after a relocalisation it is stale.
+     */
+    var `position`: FfiVec3, 
+    /**
+     * Last good view direction, same caveat.
+     */
+    var `forward`: FfiVec3, 
+    /**
+     * Degrees to turn, positive clockwise. Absent without a compass.
+     */
+    var `turnDeg`: kotlin.Float?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiRecovery: FfiConverterRustBuffer<FfiRecovery> {
+    override fun read(buf: ByteBuffer): FfiRecovery {
+        return FfiRecovery(
+            FfiConverterTypeFfiVec3.read(buf),
+            FfiConverterTypeFfiVec3.read(buf),
+            FfiConverterOptionalFloat.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiRecovery) = (
+            FfiConverterTypeFfiVec3.allocationSize(value.`position`) +
+            FfiConverterTypeFfiVec3.allocationSize(value.`forward`) +
+            FfiConverterOptionalFloat.allocationSize(value.`turnDeg`)
+    )
+
+    override fun write(value: FfiRecovery, buf: ByteBuffer) {
+            FfiConverterTypeFfiVec3.write(value.`position`, buf)
+            FfiConverterTypeFfiVec3.write(value.`forward`, buf)
+            FfiConverterOptionalFloat.write(value.`turnDeg`, buf)
+    }
+}
+
+
+
+/**
+ * The shot the script is asking for.
+ *
+ * `direction` is a world-space unit vector rather than yaw and pitch: the
+ * client has to place a marker in the scene, and handing it angles would mean
+ * re-deriving the basis on both platforms — which is how two clients start
+ * disagreeing about where "the second corner" is.
+ */
+data class FfiShot (
+    var `direction`: FfiVec3, 
+    var `height`: FfiShotHeight, 
+    /**
+     * True once the user has left the centre and is shooting for parallax.
+     */
+    var `atStation`: kotlin.Boolean, 
+    var `state`: FfiShotState, 
+    var `taken`: kotlin.UInt, 
+    var `total`: kotlin.UInt, 
+    /**
+     * Shots the user gave up on. Kept beside `taken` so a client cannot show
+     * progress without showing what it cost.
+     */
+    var `skipped`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiShot: FfiConverterRustBuffer<FfiShot> {
+    override fun read(buf: ByteBuffer): FfiShot {
+        return FfiShot(
+            FfiConverterTypeFfiVec3.read(buf),
+            FfiConverterTypeFfiShotHeight.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeFfiShotState.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiShot) = (
+            FfiConverterTypeFfiVec3.allocationSize(value.`direction`) +
+            FfiConverterTypeFfiShotHeight.allocationSize(value.`height`) +
+            FfiConverterBoolean.allocationSize(value.`atStation`) +
+            FfiConverterTypeFfiShotState.allocationSize(value.`state`) +
+            FfiConverterUInt.allocationSize(value.`taken`) +
+            FfiConverterUInt.allocationSize(value.`total`) +
+            FfiConverterUInt.allocationSize(value.`skipped`)
+    )
+
+    override fun write(value: FfiShot, buf: ByteBuffer) {
+            FfiConverterTypeFfiVec3.write(value.`direction`, buf)
+            FfiConverterTypeFfiShotHeight.write(value.`height`, buf)
+            FfiConverterBoolean.write(value.`atStation`, buf)
+            FfiConverterTypeFfiShotState.write(value.`state`, buf)
+            FfiConverterUInt.write(value.`taken`, buf)
+            FfiConverterUInt.write(value.`total`, buf)
+            FfiConverterUInt.write(value.`skipped`, buf)
+    }
+}
+
+
+
+/**
+ * A shot the user reported as unobtainable, for the capture bundle.
+ *
+ * Yaw is relative to where the capture started, matching `Shot`; absolute
+ * world yaw is not knowable at the point the script is built, and rewriting
+ * these to world angles later would invent a precision they do not have.
+ */
+data class FfiSkippedShot (
+    var `yawDeg`: kotlin.Float, 
+    var `height`: FfiShotHeight, 
+    var `atStation`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSkippedShot: FfiConverterRustBuffer<FfiSkippedShot> {
+    override fun read(buf: ByteBuffer): FfiSkippedShot {
+        return FfiSkippedShot(
+            FfiConverterFloat.read(buf),
+            FfiConverterTypeFfiShotHeight.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiSkippedShot) = (
+            FfiConverterFloat.allocationSize(value.`yawDeg`) +
+            FfiConverterTypeFfiShotHeight.allocationSize(value.`height`) +
+            FfiConverterBoolean.allocationSize(value.`atStation`)
+    )
+
+    override fun write(value: FfiSkippedShot, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`yawDeg`, buf)
+            FfiConverterTypeFfiShotHeight.write(value.`height`, buf)
+            FfiConverterBoolean.write(value.`atStation`, buf)
+    }
+}
+
+
+
 data class FfiStation (
     var `position`: FfiVec3, 
     var `expectedGain`: kotlin.Float, 
@@ -1826,7 +2427,15 @@ enum class FfiDecision {
     REJECT_EXPOSURE,
     REJECT_TRACKING,
     REJECT_TOO_SIMILAR,
-    REJECT_CAP_REACHED;
+    REJECT_CAP_REACHED,
+    /**
+     * Nothing new in it — plan §7's "adaptive selection".
+     */
+    REJECT_REDUNDANT,
+    /**
+     * Waiting for the user to aim at, or settle on, the requested shot.
+     */
+    REJECT_OFF_TARGET;
     companion object
 }
 
@@ -1975,6 +2584,86 @@ public object FfiConverterTypeFfiNag: FfiConverterRustBuffer<FfiNag> {
 
 
 
+enum class FfiShotHeight {
+    
+    BOTTOM,
+    MIDDLE,
+    TOP;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiShotHeight: FfiConverterRustBuffer<FfiShotHeight> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiShotHeight.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiShotHeight) = 4UL
+
+    override fun write(value: FfiShotHeight, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class FfiShotState {
+    
+    /**
+     * Aimed and steady; the frame is being taken.
+     */
+    TAKE,
+    /**
+     * Pointing somewhere else — turn towards the marker.
+     */
+    NOT_AIMED,
+    /**
+     * On target but still moving — hold still.
+     */
+    NOT_STEADY,
+    /**
+     * On target and steady, but still standing where the centre pass was shot.
+     * The second phase exists for the baseline; without moving there is none.
+     */
+    NOT_MOVED,
+    /**
+     * Nothing left to shoot.
+     */
+    FINISHED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiShotState: FfiConverterRustBuffer<FfiShotState> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiShotState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiShotState) = 4UL
+
+    override fun write(value: FfiShotState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class FfiTracking {
     
     NORMAL,
@@ -2002,6 +2691,166 @@ public object FfiConverterTypeFfiTracking: FfiConverterRustBuffer<FfiTracking> {
 }
 
 
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalFloat: FfiConverterRustBuffer<kotlin.Float?> {
+    override fun read(buf: ByteBuffer): kotlin.Float? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterFloat.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Float?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterFloat.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Float?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterFloat.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiPose: FfiConverterRustBuffer<FfiPose?> {
+    override fun read(buf: ByteBuffer): FfiPose? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiPose.read(buf)
+    }
+
+    override fun allocationSize(value: FfiPose?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiPose.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiPose?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiPose.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiRecovery: FfiConverterRustBuffer<FfiRecovery?> {
+    override fun read(buf: ByteBuffer): FfiRecovery? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiRecovery.read(buf)
+    }
+
+    override fun allocationSize(value: FfiRecovery?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiRecovery.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiRecovery?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiRecovery.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiShot: FfiConverterRustBuffer<FfiShot?> {
+    override fun read(buf: ByteBuffer): FfiShot? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiShot.read(buf)
+    }
+
+    override fun allocationSize(value: FfiShot?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiShot.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiShot?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiShot.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiSkippedShot: FfiConverterRustBuffer<FfiSkippedShot?> {
+    override fun read(buf: ByteBuffer): FfiSkippedShot? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiSkippedShot.read(buf)
+    }
+
+    override fun allocationSize(value: FfiSkippedShot?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiSkippedShot.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiSkippedShot?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiSkippedShot.write(value, buf)
+        }
+    }
+}
 
 
 
@@ -2125,7 +2974,63 @@ public object FfiConverterSequenceFloat: FfiConverterRustBuffer<List<kotlin.Floa
             FfiConverterFloat.write(it, buf)
         }
     }
-} fun `defaultParams`(): FfiParams {
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiSkippedShot: FfiConverterRustBuffer<List<FfiSkippedShot>> {
+    override fun read(buf: ByteBuffer): List<FfiSkippedShot> {
+        val len = buf.getInt()
+        return List<FfiSkippedShot>(len) {
+            FfiConverterTypeFfiSkippedShot.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiSkippedShot>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiSkippedShot.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiSkippedShot>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiSkippedShot.write(it, buf)
+        }
+    }
+}
+        /**
+         * True when the frame became a keyframe. Exported so a client cannot drift
+         * from the core about what counts as captured — the clients draw a running
+         * accepted/rejected tally from this.
+         */ fun `decisionAccepted`(`decision`: FfiDecision): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_func_decision_accepted(
+        FfiConverterTypeFfiDecision.lower(`decision`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The user-facing copy for a per-frame verdict, for the same reason as
+         * `nag_message`: what a rejection means, and what to do about it, is the
+         * core's to say.
+         */ fun `decisionMessage`(`decision`: FfiDecision): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_func_decision_message(
+        FfiConverterTypeFfiDecision.lower(`decision`),_status)
+}
+    )
+    }
+    
+ fun `defaultParams`(): FfiParams {
             return FfiConverterTypeFfiParams.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_recon_core_fn_func_default_params(
@@ -2143,6 +3048,23 @@ public object FfiConverterSequenceFloat: FfiConverterRustBuffer<List<kotlin.Floa
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_recon_core_fn_func_nag_message(
         FfiConverterTypeFfiNag.lower(`nag`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * What to tell the user when tracking is lost.
+         *
+         * Wording lives here for the same reason the nags do, but the reason is
+         * sharper in this case: this is the only instruction given at a moment when
+         * the screen is showing nothing trustworthy, and two clients disagreeing
+         * about which way "right" is would send users in opposite directions.
+         */ fun `recoveryMessage`(`recovery`: FfiRecovery): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_recon_core_fn_func_recovery_message(
+        FfiConverterTypeFfiRecovery.lower(`recovery`),_status)
 }
     )
     }

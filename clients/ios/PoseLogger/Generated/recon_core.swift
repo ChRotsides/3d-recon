@@ -519,6 +519,49 @@ fileprivate struct FfiConverterString: FfiConverter {
 public protocol FfiCaptureSessionProtocol : AnyObject {
     
     /**
+     * Take the picture. Returns the pose of the frame written, so the client
+     * knows which of the images it is holding to save, or null when the
+     * camera has nothing usable to offer right now.
+     *
+     * Nothing vetoes this: the user can see the scene and the marker, and a
+     * shutter that refuses a deliberate press is the worst thing a capture
+     * app can do.
+     */
+    func captureNow()  -> FfiPose?
+    
+    /**
+     * The coverage grid as points the client can draw over the real surfaces.
+     *
+     * A capture where the user cannot see what has been mapped is one where
+     * they find out what they missed after they have left the room, so this
+     * exists to be drawn rather than logged.
+     *
+     * Subsampling above `target_points` is by a hash of the voxel key, not by
+     * iteration order or reservoir sampling: a `HashMap` yields its entries in
+     * an arbitrary order that changes as it grows, so taking the first N would
+     * redraw a *different* subset every frame and the overlay would boil. A key
+     * hash keeps the chosen subset stable as long as the stride is, so points
+     * stay put and only thin out as the room grows.
+     *
+     * `target_points` is therefore a budget, not a hard cap — a hash-modulo
+     * keeps *about* that many, varying by a few percent either way. Trading the
+     * exact count for a stable subset is the whole point; a caller sizing a
+     * buffer should read the returned length rather than assume the budget.
+     */
+    func coverageCloud(targetPoints: UInt32)  -> FfiCoverageCloud
+    
+    /**
+     * Commit the candidate still held, at the end of a capture. Returns true
+     * when the client should write the image it is holding.
+     */
+    func flush()  -> Bool
+    
+    /**
+     * Whether a frame is ready to be taken, for the shutter button's state.
+     */
+    func hasCandidate()  -> Bool
+    
+    /**
      * Where to send a user who has lost tracking (PLAN.md §6.1).
      */
     func lastKnownGoodPosition()  -> FfiVec3?
@@ -539,10 +582,46 @@ public protocol FfiCaptureSessionProtocol : AnyObject {
     func onRelocalised() 
     
     /**
+     * Where to go to get tracking back, or `None` before the first keyframe.
+     */
+    func recovery()  -> FfiRecovery?
+    
+    /**
      * The floor height from ARKit/ARCore plane detection. Better than
      * inferring it, and available before any depth has run.
      */
     func setFloorHeight(y: Float) 
+    
+    /**
+     * Compass heading for this frame, degrees clockwise from magnetic north.
+     *
+     * Fed separately from `observe` because it arrives on the sensor's
+     * schedule rather than the camera's, and because a device without a
+     * usable magnetometer simply never calls it.
+     */
+    func setHeading(degrees: Float) 
+    
+    /**
+     * The user cannot get the shot being asked for; move on to the next.
+     *
+     * Returns the abandoned shot so the client can write it into the bundle,
+     * or `None` if the script had already finished — the button is live for
+     * as long as the capture is, and the last shot can land in between.
+     */
+    func skipShot()  -> FfiSkippedShot?
+    
+    /**
+     * Every shot given up on so far, for the bundle written at the end.
+     */
+    func skippedShots()  -> [FfiSkippedShot]
+    
+    /**
+     * Switch this session to a scripted capture (aim, hold, shoot).
+     *
+     * Takes effect on the next frame, whose heading becomes the script's yaw
+     * origin — so call it when the user is standing where they mean to start.
+     */
+    func startScript() 
     
 }
 
@@ -612,6 +691,70 @@ public convenience init(gravity: FfiVec3) {
 
     
     /**
+     * Take the picture. Returns the pose of the frame written, so the client
+     * knows which of the images it is holding to save, or null when the
+     * camera has nothing usable to offer right now.
+     *
+     * Nothing vetoes this: the user can see the scene and the marker, and a
+     * shutter that refuses a deliberate press is the worst thing a capture
+     * app can do.
+     */
+open func captureNow() -> FfiPose? {
+    return try!  FfiConverterOptionTypeFfiPose.lift(try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_capture_now(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * The coverage grid as points the client can draw over the real surfaces.
+     *
+     * A capture where the user cannot see what has been mapped is one where
+     * they find out what they missed after they have left the room, so this
+     * exists to be drawn rather than logged.
+     *
+     * Subsampling above `target_points` is by a hash of the voxel key, not by
+     * iteration order or reservoir sampling: a `HashMap` yields its entries in
+     * an arbitrary order that changes as it grows, so taking the first N would
+     * redraw a *different* subset every frame and the overlay would boil. A key
+     * hash keeps the chosen subset stable as long as the stride is, so points
+     * stay put and only thin out as the room grows.
+     *
+     * `target_points` is therefore a budget, not a hard cap — a hash-modulo
+     * keeps *about* that many, varying by a few percent either way. Trading the
+     * exact count for a stable subset is the whole point; a caller sizing a
+     * buffer should read the returned length rather than assume the budget.
+     */
+open func coverageCloud(targetPoints: UInt32) -> FfiCoverageCloud {
+    return try!  FfiConverterTypeFfiCoverageCloud.lift(try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_coverage_cloud(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(targetPoints),$0
+    )
+})
+}
+    
+    /**
+     * Commit the candidate still held, at the end of a capture. Returns true
+     * when the client should write the image it is holding.
+     */
+open func flush() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_flush(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Whether a frame is ready to be taken, for the shutter button's state.
+     */
+open func hasCandidate() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_has_candidate(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
      * Where to send a user who has lost tracking (PLAN.md §6.1).
      */
 open func lastKnownGoodPosition() -> FfiVec3? {
@@ -649,12 +792,72 @@ open func onRelocalised() {try! rustCall() {
 }
     
     /**
+     * Where to go to get tracking back, or `None` before the first keyframe.
+     */
+open func recovery() -> FfiRecovery? {
+    return try!  FfiConverterOptionTypeFfiRecovery.lift(try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_recovery(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
      * The floor height from ARKit/ARCore plane detection. Better than
      * inferring it, and available before any depth has run.
      */
 open func setFloorHeight(y: Float) {try! rustCall() {
     uniffi_recon_core_fn_method_fficapturesession_set_floor_height(self.uniffiClonePointer(),
         FfiConverterFloat.lower(y),$0
+    )
+}
+}
+    
+    /**
+     * Compass heading for this frame, degrees clockwise from magnetic north.
+     *
+     * Fed separately from `observe` because it arrives on the sensor's
+     * schedule rather than the camera's, and because a device without a
+     * usable magnetometer simply never calls it.
+     */
+open func setHeading(degrees: Float) {try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_set_heading(self.uniffiClonePointer(),
+        FfiConverterFloat.lower(degrees),$0
+    )
+}
+}
+    
+    /**
+     * The user cannot get the shot being asked for; move on to the next.
+     *
+     * Returns the abandoned shot so the client can write it into the bundle,
+     * or `None` if the script had already finished — the button is live for
+     * as long as the capture is, and the last shot can land in between.
+     */
+open func skipShot() -> FfiSkippedShot? {
+    return try!  FfiConverterOptionTypeFfiSkippedShot.lift(try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_skip_shot(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Every shot given up on so far, for the bundle written at the end.
+     */
+open func skippedShots() -> [FfiSkippedShot] {
+    return try!  FfiConverterSequenceTypeFfiSkippedShot.lift(try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_skipped_shots(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Switch this session to a scripted capture (aim, hold, shoot).
+     *
+     * Takes effect on the next frame, whose heading becomes the script's yaw
+     * origin — so call it when the user is standing where they mean to start.
+     */
+open func startScript() {try! rustCall() {
+    uniffi_recon_core_fn_method_fficapturesession_start_script(self.uniffiClonePointer(),$0
     )
 }
 }
@@ -711,6 +914,109 @@ public func FfiConverterTypeFfiCaptureSession_lift(_ pointer: UnsafeMutableRawPo
 #endif
 public func FfiConverterTypeFfiCaptureSession_lower(_ value: FfiCaptureSession) -> UnsafeMutableRawPointer {
     return FfiConverterTypeFfiCaptureSession.lower(value)
+}
+
+
+/**
+ * A drawable snapshot of the coverage grid (plan §6.1).
+ *
+ * Flat arrays rather than a vector of records for the same reason `observe`
+ * takes them: this crosses the FFI boundary several times a second with
+ * thousands of entries, and UniFFI copies every record.
+ */
+public struct FfiCoverageCloud {
+    /**
+     * Voxel centres as flat xyz triples, world frame.
+     */
+    public var points: [Float]
+    /**
+     * Per voxel, `quality / q_min` clamped to 0..1 — 1.0 has cleared the bar.
+     * This is what the client colours by, so a user can see which surfaces are
+     * merely *seen* and which are actually *done*.
+     */
+    public var fill: [Float]
+    /**
+     * Voxels in the grid before subsampling, so the client can say so.
+     */
+    public var total: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Voxel centres as flat xyz triples, world frame.
+         */points: [Float], 
+        /**
+         * Per voxel, `quality / q_min` clamped to 0..1 — 1.0 has cleared the bar.
+         * This is what the client colours by, so a user can see which surfaces are
+         * merely *seen* and which are actually *done*.
+         */fill: [Float], 
+        /**
+         * Voxels in the grid before subsampling, so the client can say so.
+         */total: UInt32) {
+        self.points = points
+        self.fill = fill
+        self.total = total
+    }
+}
+
+
+
+extension FfiCoverageCloud: Equatable, Hashable {
+    public static func ==(lhs: FfiCoverageCloud, rhs: FfiCoverageCloud) -> Bool {
+        if lhs.points != rhs.points {
+            return false
+        }
+        if lhs.fill != rhs.fill {
+            return false
+        }
+        if lhs.total != rhs.total {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(points)
+        hasher.combine(fill)
+        hasher.combine(total)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCoverageCloud: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCoverageCloud {
+        return
+            try FfiCoverageCloud(
+                points: FfiConverterSequenceFloat.read(from: &buf), 
+                fill: FfiConverterSequenceFloat.read(from: &buf), 
+                total: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiCoverageCloud, into buf: inout [UInt8]) {
+        FfiConverterSequenceFloat.write(value.points, into: &buf)
+        FfiConverterSequenceFloat.write(value.fill, into: &buf)
+        FfiConverterUInt32.write(value.total, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCoverageCloud_lift(_ buf: RustBuffer) throws -> FfiCoverageCloud {
+    return try FfiConverterTypeFfiCoverageCloud.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCoverageCloud_lower(_ value: FfiCoverageCloud) -> RustBuffer {
+    return FfiConverterTypeFfiCoverageCloud.lower(value)
 }
 
 
@@ -838,6 +1144,24 @@ public func FfiConverterTypeFfiFrame_lower(_ value: FfiFrame) -> RustBuffer {
 
 public struct FfiGuidance {
     public var decision: FfiDecision
+    /**
+     * Retain this frame's image: it is the best candidate for the current
+     * viewpoint so far. The core never sees pixels, so the client is told
+     * which frame to keep rather than handing frames in.
+     */
+    public var hold: Bool
+    /**
+     * Write the retained image as a keyframe now, using [`Self::commit_pose`].
+     *
+     * This refers to an *earlier* frame than the one just offered — the one
+     * the client was holding — so the pose travels with the instruction
+     * rather than being taken from the current frame.
+     */
+    public var commitHeld: Bool
+    /**
+     * Pose of the frame being committed, world<-camera.
+     */
+    public var commitPose: FfiPose?
     public var nag: FfiNag?
     /**
      * Where to draw the AR floor ring, if anywhere.
@@ -848,14 +1172,39 @@ public struct FfiGuidance {
     public var ceilingCoverage: Float
     public var complete: Bool
     public var keyframes: UInt32
+    /**
+     * Set while a scripted capture is running.
+     */
+    public var shot: FfiShot?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(decision: FfiDecision, nag: FfiNag?, 
+    public init(decision: FfiDecision, 
+        /**
+         * Retain this frame's image: it is the best candidate for the current
+         * viewpoint so far. The core never sees pixels, so the client is told
+         * which frame to keep rather than handing frames in.
+         */hold: Bool, 
+        /**
+         * Write the retained image as a keyframe now, using [`Self::commit_pose`].
+         *
+         * This refers to an *earlier* frame than the one just offered — the one
+         * the client was holding — so the pose travels with the instruction
+         * rather than being taken from the current frame.
+         */commitHeld: Bool, 
+        /**
+         * Pose of the frame being committed, world<-camera.
+         */commitPose: FfiPose?, nag: FfiNag?, 
         /**
          * Where to draw the AR floor ring, if anywhere.
-         */station: FfiStation?, floorCoverage: Float, wallCoverage: Float, ceilingCoverage: Float, complete: Bool, keyframes: UInt32) {
+         */station: FfiStation?, floorCoverage: Float, wallCoverage: Float, ceilingCoverage: Float, complete: Bool, keyframes: UInt32, 
+        /**
+         * Set while a scripted capture is running.
+         */shot: FfiShot?) {
         self.decision = decision
+        self.hold = hold
+        self.commitHeld = commitHeld
+        self.commitPose = commitPose
         self.nag = nag
         self.station = station
         self.floorCoverage = floorCoverage
@@ -863,6 +1212,7 @@ public struct FfiGuidance {
         self.ceilingCoverage = ceilingCoverage
         self.complete = complete
         self.keyframes = keyframes
+        self.shot = shot
     }
 }
 
@@ -871,6 +1221,15 @@ public struct FfiGuidance {
 extension FfiGuidance: Equatable, Hashable {
     public static func ==(lhs: FfiGuidance, rhs: FfiGuidance) -> Bool {
         if lhs.decision != rhs.decision {
+            return false
+        }
+        if lhs.hold != rhs.hold {
+            return false
+        }
+        if lhs.commitHeld != rhs.commitHeld {
+            return false
+        }
+        if lhs.commitPose != rhs.commitPose {
             return false
         }
         if lhs.nag != rhs.nag {
@@ -894,11 +1253,17 @@ extension FfiGuidance: Equatable, Hashable {
         if lhs.keyframes != rhs.keyframes {
             return false
         }
+        if lhs.shot != rhs.shot {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(decision)
+        hasher.combine(hold)
+        hasher.combine(commitHeld)
+        hasher.combine(commitPose)
         hasher.combine(nag)
         hasher.combine(station)
         hasher.combine(floorCoverage)
@@ -906,6 +1271,7 @@ extension FfiGuidance: Equatable, Hashable {
         hasher.combine(ceilingCoverage)
         hasher.combine(complete)
         hasher.combine(keyframes)
+        hasher.combine(shot)
     }
 }
 
@@ -918,18 +1284,25 @@ public struct FfiConverterTypeFfiGuidance: FfiConverterRustBuffer {
         return
             try FfiGuidance(
                 decision: FfiConverterTypeFfiDecision.read(from: &buf), 
+                hold: FfiConverterBool.read(from: &buf), 
+                commitHeld: FfiConverterBool.read(from: &buf), 
+                commitPose: FfiConverterOptionTypeFfiPose.read(from: &buf), 
                 nag: FfiConverterOptionTypeFfiNag.read(from: &buf), 
                 station: FfiConverterOptionTypeFfiStation.read(from: &buf), 
                 floorCoverage: FfiConverterFloat.read(from: &buf), 
                 wallCoverage: FfiConverterFloat.read(from: &buf), 
                 ceilingCoverage: FfiConverterFloat.read(from: &buf), 
                 complete: FfiConverterBool.read(from: &buf), 
-                keyframes: FfiConverterUInt32.read(from: &buf)
+                keyframes: FfiConverterUInt32.read(from: &buf), 
+                shot: FfiConverterOptionTypeFfiShot.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiGuidance, into buf: inout [UInt8]) {
         FfiConverterTypeFfiDecision.write(value.decision, into: &buf)
+        FfiConverterBool.write(value.hold, into: &buf)
+        FfiConverterBool.write(value.commitHeld, into: &buf)
+        FfiConverterOptionTypeFfiPose.write(value.commitPose, into: &buf)
         FfiConverterOptionTypeFfiNag.write(value.nag, into: &buf)
         FfiConverterOptionTypeFfiStation.write(value.station, into: &buf)
         FfiConverterFloat.write(value.floorCoverage, into: &buf)
@@ -937,6 +1310,7 @@ public struct FfiConverterTypeFfiGuidance: FfiConverterRustBuffer {
         FfiConverterFloat.write(value.ceilingCoverage, into: &buf)
         FfiConverterBool.write(value.complete, into: &buf)
         FfiConverterUInt32.write(value.keyframes, into: &buf)
+        FfiConverterOptionTypeFfiShot.write(value.shot, into: &buf)
     }
 }
 
@@ -1167,6 +1541,312 @@ public func FfiConverterTypeFfiPose_lower(_ value: FfiPose) -> RustBuffer {
 }
 
 
+/**
+ * Where to go, and which way to turn, to get tracking back.
+ */
+public struct FfiRecovery {
+    /**
+     * Last good camera position, ARCore world frame. Only drawable while
+     * ARCore's world is still valid — after a relocalisation it is stale.
+     */
+    public var position: FfiVec3
+    /**
+     * Last good view direction, same caveat.
+     */
+    public var forward: FfiVec3
+    /**
+     * Degrees to turn, positive clockwise. Absent without a compass.
+     */
+    public var turnDeg: Float?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Last good camera position, ARCore world frame. Only drawable while
+         * ARCore's world is still valid — after a relocalisation it is stale.
+         */position: FfiVec3, 
+        /**
+         * Last good view direction, same caveat.
+         */forward: FfiVec3, 
+        /**
+         * Degrees to turn, positive clockwise. Absent without a compass.
+         */turnDeg: Float?) {
+        self.position = position
+        self.forward = forward
+        self.turnDeg = turnDeg
+    }
+}
+
+
+
+extension FfiRecovery: Equatable, Hashable {
+    public static func ==(lhs: FfiRecovery, rhs: FfiRecovery) -> Bool {
+        if lhs.position != rhs.position {
+            return false
+        }
+        if lhs.forward != rhs.forward {
+            return false
+        }
+        if lhs.turnDeg != rhs.turnDeg {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(position)
+        hasher.combine(forward)
+        hasher.combine(turnDeg)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiRecovery: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRecovery {
+        return
+            try FfiRecovery(
+                position: FfiConverterTypeFfiVec3.read(from: &buf), 
+                forward: FfiConverterTypeFfiVec3.read(from: &buf), 
+                turnDeg: FfiConverterOptionFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiRecovery, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiVec3.write(value.position, into: &buf)
+        FfiConverterTypeFfiVec3.write(value.forward, into: &buf)
+        FfiConverterOptionFloat.write(value.turnDeg, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRecovery_lift(_ buf: RustBuffer) throws -> FfiRecovery {
+    return try FfiConverterTypeFfiRecovery.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRecovery_lower(_ value: FfiRecovery) -> RustBuffer {
+    return FfiConverterTypeFfiRecovery.lower(value)
+}
+
+
+/**
+ * The shot the script is asking for.
+ *
+ * `direction` is a world-space unit vector rather than yaw and pitch: the
+ * client has to place a marker in the scene, and handing it angles would mean
+ * re-deriving the basis on both platforms — which is how two clients start
+ * disagreeing about where "the second corner" is.
+ */
+public struct FfiShot {
+    public var direction: FfiVec3
+    public var height: FfiShotHeight
+    /**
+     * True once the user has left the centre and is shooting for parallax.
+     */
+    public var atStation: Bool
+    public var state: FfiShotState
+    public var taken: UInt32
+    public var total: UInt32
+    /**
+     * Shots the user gave up on. Kept beside `taken` so a client cannot show
+     * progress without showing what it cost.
+     */
+    public var skipped: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(direction: FfiVec3, height: FfiShotHeight, 
+        /**
+         * True once the user has left the centre and is shooting for parallax.
+         */atStation: Bool, state: FfiShotState, taken: UInt32, total: UInt32, 
+        /**
+         * Shots the user gave up on. Kept beside `taken` so a client cannot show
+         * progress without showing what it cost.
+         */skipped: UInt32) {
+        self.direction = direction
+        self.height = height
+        self.atStation = atStation
+        self.state = state
+        self.taken = taken
+        self.total = total
+        self.skipped = skipped
+    }
+}
+
+
+
+extension FfiShot: Equatable, Hashable {
+    public static func ==(lhs: FfiShot, rhs: FfiShot) -> Bool {
+        if lhs.direction != rhs.direction {
+            return false
+        }
+        if lhs.height != rhs.height {
+            return false
+        }
+        if lhs.atStation != rhs.atStation {
+            return false
+        }
+        if lhs.state != rhs.state {
+            return false
+        }
+        if lhs.taken != rhs.taken {
+            return false
+        }
+        if lhs.total != rhs.total {
+            return false
+        }
+        if lhs.skipped != rhs.skipped {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(direction)
+        hasher.combine(height)
+        hasher.combine(atStation)
+        hasher.combine(state)
+        hasher.combine(taken)
+        hasher.combine(total)
+        hasher.combine(skipped)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiShot: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiShot {
+        return
+            try FfiShot(
+                direction: FfiConverterTypeFfiVec3.read(from: &buf), 
+                height: FfiConverterTypeFfiShotHeight.read(from: &buf), 
+                atStation: FfiConverterBool.read(from: &buf), 
+                state: FfiConverterTypeFfiShotState.read(from: &buf), 
+                taken: FfiConverterUInt32.read(from: &buf), 
+                total: FfiConverterUInt32.read(from: &buf), 
+                skipped: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiShot, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiVec3.write(value.direction, into: &buf)
+        FfiConverterTypeFfiShotHeight.write(value.height, into: &buf)
+        FfiConverterBool.write(value.atStation, into: &buf)
+        FfiConverterTypeFfiShotState.write(value.state, into: &buf)
+        FfiConverterUInt32.write(value.taken, into: &buf)
+        FfiConverterUInt32.write(value.total, into: &buf)
+        FfiConverterUInt32.write(value.skipped, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiShot_lift(_ buf: RustBuffer) throws -> FfiShot {
+    return try FfiConverterTypeFfiShot.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiShot_lower(_ value: FfiShot) -> RustBuffer {
+    return FfiConverterTypeFfiShot.lower(value)
+}
+
+
+/**
+ * A shot the user reported as unobtainable, for the capture bundle.
+ *
+ * Yaw is relative to where the capture started, matching `Shot`; absolute
+ * world yaw is not knowable at the point the script is built, and rewriting
+ * these to world angles later would invent a precision they do not have.
+ */
+public struct FfiSkippedShot {
+    public var yawDeg: Float
+    public var height: FfiShotHeight
+    public var atStation: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(yawDeg: Float, height: FfiShotHeight, atStation: Bool) {
+        self.yawDeg = yawDeg
+        self.height = height
+        self.atStation = atStation
+    }
+}
+
+
+
+extension FfiSkippedShot: Equatable, Hashable {
+    public static func ==(lhs: FfiSkippedShot, rhs: FfiSkippedShot) -> Bool {
+        if lhs.yawDeg != rhs.yawDeg {
+            return false
+        }
+        if lhs.height != rhs.height {
+            return false
+        }
+        if lhs.atStation != rhs.atStation {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(yawDeg)
+        hasher.combine(height)
+        hasher.combine(atStation)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSkippedShot: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSkippedShot {
+        return
+            try FfiSkippedShot(
+                yawDeg: FfiConverterFloat.read(from: &buf), 
+                height: FfiConverterTypeFfiShotHeight.read(from: &buf), 
+                atStation: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSkippedShot, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.yawDeg, into: &buf)
+        FfiConverterTypeFfiShotHeight.write(value.height, into: &buf)
+        FfiConverterBool.write(value.atStation, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSkippedShot_lift(_ buf: RustBuffer) throws -> FfiSkippedShot {
+    return try FfiConverterTypeFfiSkippedShot.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSkippedShot_lower(_ value: FfiSkippedShot) -> RustBuffer {
+    return FfiConverterTypeFfiSkippedShot.lower(value)
+}
+
+
 public struct FfiStation {
     public var position: FfiVec3
     public var expectedGain: Float
@@ -1325,6 +2005,14 @@ public enum FfiDecision {
     case rejectTracking
     case rejectTooSimilar
     case rejectCapReached
+    /**
+     * Nothing new in it — plan §7's "adaptive selection".
+     */
+    case rejectRedundant
+    /**
+     * Waiting for the user to aim at, or settle on, the requested shot.
+     */
+    case rejectOffTarget
 }
 
 
@@ -1349,6 +2037,10 @@ public struct FfiConverterTypeFfiDecision: FfiConverterRustBuffer {
         case 5: return .rejectTooSimilar
         
         case 6: return .rejectCapReached
+        
+        case 7: return .rejectRedundant
+        
+        case 8: return .rejectOffTarget
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1380,6 +2072,14 @@ public struct FfiConverterTypeFfiDecision: FfiConverterRustBuffer {
         
         case .rejectCapReached:
             writeInt(&buf, Int32(6))
+        
+        
+        case .rejectRedundant:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .rejectOffTarget:
+            writeInt(&buf, Int32(8))
         
         }
     }
@@ -1571,6 +2271,178 @@ extension FfiNag: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum FfiShotHeight {
+    
+    case bottom
+    case middle
+    case top
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiShotHeight: FfiConverterRustBuffer {
+    typealias SwiftType = FfiShotHeight
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiShotHeight {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .bottom
+        
+        case 2: return .middle
+        
+        case 3: return .top
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiShotHeight, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .bottom:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .middle:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .top:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiShotHeight_lift(_ buf: RustBuffer) throws -> FfiShotHeight {
+    return try FfiConverterTypeFfiShotHeight.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiShotHeight_lower(_ value: FfiShotHeight) -> RustBuffer {
+    return FfiConverterTypeFfiShotHeight.lower(value)
+}
+
+
+
+extension FfiShotHeight: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiShotState {
+    
+    /**
+     * Aimed and steady; the frame is being taken.
+     */
+    case take
+    /**
+     * Pointing somewhere else — turn towards the marker.
+     */
+    case notAimed
+    /**
+     * On target but still moving — hold still.
+     */
+    case notSteady
+    /**
+     * On target and steady, but still standing where the centre pass was shot.
+     * The second phase exists for the baseline; without moving there is none.
+     */
+    case notMoved
+    /**
+     * Nothing left to shoot.
+     */
+    case finished
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiShotState: FfiConverterRustBuffer {
+    typealias SwiftType = FfiShotState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiShotState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .take
+        
+        case 2: return .notAimed
+        
+        case 3: return .notSteady
+        
+        case 4: return .notMoved
+        
+        case 5: return .finished
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiShotState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .take:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .notAimed:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .notSteady:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .notMoved:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .finished:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiShotState_lift(_ buf: RustBuffer) throws -> FfiShotState {
+    return try FfiConverterTypeFfiShotState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiShotState_lower(_ value: FfiShotState) -> RustBuffer {
+    return FfiConverterTypeFfiShotState.lower(value)
+}
+
+
+
+extension FfiShotState: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum FfiTracking {
     
     case normal
@@ -1638,6 +2510,126 @@ public func FfiConverterTypeFfiTracking_lower(_ value: FfiTracking) -> RustBuffe
 extension FfiTracking: Equatable, Hashable {}
 
 
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
+    typealias SwiftType = Float?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterFloat.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterFloat.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiPose: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPose?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiPose.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiPose.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiRecovery: FfiConverterRustBuffer {
+    typealias SwiftType = FfiRecovery?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiRecovery.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiRecovery.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiShot: FfiConverterRustBuffer {
+    typealias SwiftType = FfiShot?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiShot.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiShot.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiSkippedShot: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSkippedShot?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiSkippedShot.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiSkippedShot.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1735,6 +2727,55 @@ fileprivate struct FfiConverterSequenceFloat: FfiConverterRustBuffer {
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiSkippedShot: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiSkippedShot]
+
+    public static func write(_ value: [FfiSkippedShot], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiSkippedShot.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiSkippedShot] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiSkippedShot]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiSkippedShot.read(from: &buf))
+        }
+        return seq
+    }
+}
+/**
+ * True when the frame became a keyframe. Exported so a client cannot drift
+ * from the core about what counts as captured — the clients draw a running
+ * accepted/rejected tally from this.
+ */
+public func decisionAccepted(decision: FfiDecision) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_recon_core_fn_func_decision_accepted(
+        FfiConverterTypeFfiDecision.lower(decision),$0
+    )
+})
+}
+/**
+ * The user-facing copy for a per-frame verdict, for the same reason as
+ * `nag_message`: what a rejection means, and what to do about it, is the
+ * core's to say.
+ */
+public func decisionMessage(decision: FfiDecision) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_recon_core_fn_func_decision_message(
+        FfiConverterTypeFfiDecision.lower(decision),$0
+    )
+})
+}
 public func defaultParams() -> FfiParams {
     return try!  FfiConverterTypeFfiParams.lift(try! rustCall() {
     uniffi_recon_core_fn_func_default_params($0
@@ -1749,6 +2790,21 @@ public func nagMessage(nag: FfiNag) -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_recon_core_fn_func_nag_message(
         FfiConverterTypeFfiNag.lower(nag),$0
+    )
+})
+}
+/**
+ * What to tell the user when tracking is lost.
+ *
+ * Wording lives here for the same reason the nags do, but the reason is
+ * sharper in this case: this is the only instruction given at a moment when
+ * the screen is showing nothing trustworthy, and two clients disagreeing
+ * about which way "right" is would send users in opposite directions.
+ */
+public func recoveryMessage(recovery: FfiRecovery) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_recon_core_fn_func_recovery_message(
+        FfiConverterTypeFfiRecovery.lower(recovery),$0
     )
 })
 }
@@ -1768,10 +2824,31 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_recon_core_checksum_func_decision_accepted() != 55155) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_func_decision_message() != 37777) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_recon_core_checksum_func_default_params() != 14609) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_recon_core_checksum_func_nag_message() != 54813) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_func_recovery_message() != 16024) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_capture_now() != 54950) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_coverage_cloud() != 42394) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_flush() != 17954) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_has_candidate() != 54334) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_recon_core_checksum_method_fficapturesession_last_known_good_position() != 43787) {
@@ -1783,7 +2860,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_recon_core_checksum_method_fficapturesession_on_relocalised() != 31436) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_recon_core_checksum_method_fficapturesession_recovery() != 4456) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_recon_core_checksum_method_fficapturesession_set_floor_height() != 45994) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_set_heading() != 39906) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_skip_shot() != 4892) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_skipped_shots() != 50714) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recon_core_checksum_method_fficapturesession_start_script() != 49549) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_recon_core_checksum_constructor_fficapturesession_new() != 22230) {

@@ -96,18 +96,45 @@ data class DoorwayWire(
     @SerialName("height_m") val heightM: Double,
 )
 
+/**
+ * A shot the user reported as unobtainable.
+ *
+ * Recorded so the harness can tell a direction nobody could reach from one
+ * the script never asked for. Without it a capture that skipped its way to
+ * the end is indistinguishable from a complete one, and the first thing the
+ * validator would do with that is trust it.
+ *
+ * Yaw is degrees relative to where the capture started, matching the core's
+ * own convention — the room's orientation is not known when the script is
+ * built, and converting to world angles later would invent precision.
+ */
+@Serializable
+data class SkippedShotWire(
+    @SerialName("yaw_deg") val yawDeg: Double,
+    /** "bottom" | "middle" | "top" — the floor, wall or ceiling junction. */
+    val height: String,
+    @SerialName("at_station") val atStation: Boolean,
+)
+
 @Serializable
 data class SessionBundleWire(
     @SerialName("session_id") val sessionId: String,
     val device: DeviceInfo,
     @SerialName("room_id") val roomId: String,
     val gravity: List<Double>,
+    /** Explicitly separates production depth captures from the RGB-only fallback. */
+    @SerialName("capture_mode") val captureMode: String = "unknown",
+    /** Startup proof that ARCore returned a real depth image for this session. */
+    @SerialName("depth_self_test") val depthSelfTest: String? = null,
+    @SerialName("depth_frame_count") val depthFrameCount: Int = 0,
     val frame: CoordinateFrame = CoordinateFrame(),
     val keyframes: List<KeyframeWire> = emptyList(),
     @SerialName("sparse_points") val sparsePoints: List<SparsePointWire> = emptyList(),
     @SerialName("reference_measurements")
     val referenceMeasurements: List<ReferenceMeasurementWire> = emptyList(),
     val doorways: List<DoorwayWire> = emptyList(),
+    /** Shots the user could not obtain; empty on a capture that got everything. */
+    @SerialName("skipped_shots") val skippedShots: List<SkippedShotWire> = emptyList(),
     @SerialName("schema_version") val schemaVersion: Int = 1,
 )
 
@@ -123,7 +150,10 @@ object FrameConversion {
      * `m[col * 4 + row]` — transposing this by accident is precisely how a
      * mirrored scene gets shipped, so the indexing is written out explicitly.
      */
-    fun fromArCore(pose: ArPose): PoseWire {
+    fun fromArCore(
+        pose: ArPose,
+        clockwiseImageRotationDegrees: Int = 0,
+    ): PoseWire {
         val m = FloatArray(16)
         pose.toMatrix(m, 0)
 
@@ -142,7 +172,39 @@ object FrameConversion {
                 "ARCore pose is not a pure rotation (det=$det); the pose carries scale."
             )
         }
-        return PoseWire(r, t)
+        return rotateCameraAxes(
+            PoseWire(r, t),
+            clockwiseImageRotationDegrees,
+        )
+    }
+
+    /**
+     * Rotate the camera basis with display-upright pixels.
+     *
+     * Rotating an image is not just an intrinsics change: the saved image's +X
+     * and +Y axes are new camera axes. Post-multiplying world<-camera by this
+     * Z rotation keeps every unprojected ray on the same world-space ray.
+     */
+    fun rotateCameraAxes(
+        pose: PoseWire,
+        clockwiseImageRotationDegrees: Int,
+    ): PoseWire {
+        val rotation = ((clockwiseImageRotationDegrees % 360) + 360) % 360
+        require(rotation % 90 == 0) { "image rotation must be a multiple of 90, got $rotation" }
+        val radians = Math.toRadians(rotation.toDouble())
+        val c = kotlin.math.cos(radians)
+        val s = kotlin.math.sin(radians)
+        val oldFromNew = listOf(
+            listOf(c, -s, 0.0),
+            listOf(s, c, 0.0),
+            listOf(0.0, 0.0, 1.0),
+        )
+        val rotated = List(3) { row ->
+            List(3) { col ->
+                (0 until 3).sumOf { k -> pose.R[row][k] * oldFromNew[k][col] }
+            }
+        }
+        return pose.copy(R = rotated)
     }
 
     private fun determinant3(r: List<List<Double>>): Double =
@@ -158,22 +220,85 @@ object FrameConversion {
     val GRAVITY_DOWN = listOf(0.0, -1.0, 0.0)
 
     /**
-     * ARCore reports intrinsics for the CPU image at its own resolution. If we
-     * downscale before saving, the intrinsics must be scaled to match or every
-     * back-projection downstream is off by the scale factor.
+     * ARCore reports unrotated intrinsics for the CPU sensor image. Captured
+     * pixels are rotated into display-upright orientation before saving, so the
+     * principal point and focal axes must undergo the exact same transform
+     * before they are scaled to the saved resolution.
      */
-    fun intrinsicsFor(camera: Camera, savedWidth: Int, savedHeight: Int): IntrinsicsWire {
+    fun intrinsicsFor(
+        camera: Camera,
+        savedWidth: Int,
+        savedHeight: Int,
+        clockwiseRotationDegrees: Int,
+    ): IntrinsicsWire {
         val intr = camera.imageIntrinsics
         val dims = intr.imageDimensions
         val focal = intr.focalLength
         val principal = intr.principalPoint
-        val sx = savedWidth.toDouble() / dims[0].toDouble()
-        val sy = savedHeight.toDouble() / dims[1].toDouble()
-        return IntrinsicsWire(
-            fx = focal[0].toDouble() * sx,
-            fy = focal[1].toDouble() * sy,
-            cx = principal[0].toDouble() * sx,
-            cy = principal[1].toDouble() * sy,
+        return rotateAndScaleIntrinsics(
+            IntrinsicsWire(
+                fx = focal[0].toDouble(),
+                fy = focal[1].toDouble(),
+                cx = principal[0].toDouble(),
+                cy = principal[1].toDouble(),
+                width = dims[0],
+                height = dims[1],
+            ),
+            clockwiseRotationDegrees,
+            savedWidth,
+            savedHeight,
+        )
+    }
+
+    /** Pure form of [intrinsicsFor], kept device-free for reprojection tests. */
+    fun rotateAndScaleIntrinsics(
+        source: IntrinsicsWire,
+        clockwiseRotationDegrees: Int,
+        savedWidth: Int,
+        savedHeight: Int,
+    ): IntrinsicsWire {
+        val rotation = ((clockwiseRotationDegrees % 360) + 360) % 360
+        require(rotation % 90 == 0) { "image rotation must be a multiple of 90, got $rotation" }
+        require(savedWidth > 0 && savedHeight > 0) { "saved image dimensions must be positive" }
+
+        val rotated = when (rotation) {
+            0 -> source
+            90 -> IntrinsicsWire(
+                fx = source.fy,
+                fy = source.fx,
+                cx = source.height - 1.0 - source.cy,
+                cy = source.cx,
+                width = source.height,
+                height = source.width,
+                distortion = source.distortion,
+            )
+            180 -> IntrinsicsWire(
+                fx = source.fx,
+                fy = source.fy,
+                cx = source.width - 1.0 - source.cx,
+                cy = source.height - 1.0 - source.cy,
+                width = source.width,
+                height = source.height,
+                distortion = source.distortion,
+            )
+            270 -> IntrinsicsWire(
+                fx = source.fy,
+                fy = source.fx,
+                cx = source.cy,
+                cy = source.width - 1.0 - source.cx,
+                width = source.height,
+                height = source.width,
+                distortion = source.distortion,
+            )
+            else -> error("unreachable rotation $rotation")
+        }
+        val sx = savedWidth.toDouble() / rotated.width.toDouble()
+        val sy = savedHeight.toDouble() / rotated.height.toDouble()
+        return rotated.copy(
+            fx = rotated.fx * sx,
+            fy = rotated.fy * sy,
+            cx = rotated.cx * sx,
+            cy = rotated.cy * sy,
             width = savedWidth,
             height = savedHeight,
         )

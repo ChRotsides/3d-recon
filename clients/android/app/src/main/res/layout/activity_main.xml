@@ -8,17 +8,16 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <TextView
-        android:id="@+id/status"
+    <!--
+      Guidance overlay. Declared after the preview so it draws on top of it, and
+      before the button so the button still receives touches: a RelativeLayout
+      offers a touch to its children in reverse draw order, and the HUD is not
+      clickable, so anything it does not consume falls through anyway.
+    -->
+    <com.recon.poselogger.GuidanceHud
+        android:id="@+id/hud"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_alignParentTop="true"
-        android:background="#99000000"
-        android:padding="14dp"
-        android:textColor="#FFFFFF"
-        android:textSize="14sp"
-        android:fontFamily="monospace"
-        android:text="@string/starting" />
+        android:layout_height="match_parent" />
 
     <Button
         android:id="@+id/action"
@@ -29,4 +28,41 @@
         android:layout_marginBottom="40dp"
         android:paddingHorizontal="36dp"
         android:text="@string/start" />
+
+    <!--
+      The shutter. Big, central, and above everything else the thumb reaches
+      for, because it is now the only way a picture is taken.
+    -->
+    <Button
+        android:id="@+id/shutter"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/skip"
+        android:layout_centerHorizontal="true"
+        android:layout_marginBottom="10dp"
+        android:paddingHorizontal="48dp"
+        android:paddingVertical="14dp"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        android:text="@string/take_picture"
+        android:visibility="gone" />
+
+    <!--
+      The way out of a shot that cannot be taken. Sits above the stop button
+      rather than beside it: the two are not peers, and a mis-tap that ends
+      the capture costs the whole room. Hidden unless a script is running,
+      because with no shot being asked for there is nothing to skip.
+    -->
+    <Button
+        android:id="@+id/skip"
+        style="?android:attr/borderlessButtonStyle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/action"
+        android:layout_centerHorizontal="true"
+        android:layout_marginBottom="8dp"
+        android:paddingHorizontal="20dp"
+        android:textColor="#FF9E24"
+        android:text="@string/skip_shot"
+        android:visibility="gone" />
 </RelativeLayout>

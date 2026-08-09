@@ -2,6 +2,13 @@
 <resources>
     <string name="app_name">Pose Logger</string>
     <string name="start">Start capture</string>
+    <string name="start_rgb_only">Start RGB-only</string>
     <string name="stop">Stop</string>
     <string name="starting">starting…</string>
+    <string name="take_picture">Take picture</string>
+    <string name="shutter_not_ready">No usable frame — hold steady a moment</string>
+    <string name="skip_shot">Can\'t get this shot</string>
+    <string name="skipped_shot">Skipped — next shot</string>
+    <string name="skip_nothing_left">Nothing left to skip</string>
+    <string name="depth_retry">Testing depth — carry the phone a few steps</string>
 </resources>

@@ -125,6 +125,104 @@ class FrameConversionTest {
     }
 
     @Test
+    fun `rotating pixels rotates intrinsics through the same reprojection`() {
+        val source = IntrinsicsWire(
+            fx = 800.0, fy = 820.0, cx = 301.25, cy = 211.75, width = 640, height = 480,
+        )
+        val point = doubleArrayOf(0.17, -0.09, 1.4)
+        val u = source.fx * point[0] / point[2] + source.cx
+        val v = source.fy * point[1] / point[2] + source.cy
+
+        for (rotation in listOf(0, 90, 180, 270)) {
+            val savedWidth = if (rotation % 180 == 0) source.width else source.height
+            val savedHeight = if (rotation % 180 == 0) source.height else source.width
+            val rotated = FrameConversion.rotateAndScaleIntrinsics(
+                source, rotation, savedWidth, savedHeight
+            )
+            val expected = when (rotation) {
+                0 -> doubleArrayOf(u, v)
+                90 -> doubleArrayOf(source.height - 1.0 - v, u)
+                180 -> doubleArrayOf(source.width - 1.0 - u, source.height - 1.0 - v)
+                else -> doubleArrayOf(v, source.width - 1.0 - u)
+            }
+            val projected = when (rotation) {
+                0 -> doubleArrayOf(
+                    rotated.fx * point[0] / point[2] + rotated.cx,
+                    rotated.fy * point[1] / point[2] + rotated.cy,
+                )
+                90 -> doubleArrayOf(
+                    rotated.fx * (-point[1]) / point[2] + rotated.cx,
+                    rotated.fy * point[0] / point[2] + rotated.cy,
+                )
+                180 -> doubleArrayOf(
+                    rotated.fx * (-point[0]) / point[2] + rotated.cx,
+                    rotated.fy * (-point[1]) / point[2] + rotated.cy,
+                )
+                else -> doubleArrayOf(
+                    rotated.fx * point[1] / point[2] + rotated.cx,
+                    rotated.fy * (-point[0]) / point[2] + rotated.cy,
+                )
+            }
+            assertEquals("u at $rotation degrees", expected[0], projected[0], 1e-9)
+            assertEquals("v at $rotation degrees", expected[1], projected[1], 1e-9)
+        }
+    }
+
+    @Test
+    fun `intrinsics rotation round trips for every device orientation`() {
+        val source = IntrinsicsWire(
+            fx = 790.0, fy = 810.0, cx = 300.5, cy = 220.25, width = 640, height = 480,
+        )
+        for (rotation in listOf(0, 90, 180, 270)) {
+            val w = if (rotation % 180 == 0) source.width else source.height
+            val h = if (rotation % 180 == 0) source.height else source.width
+            val rotated = FrameConversion.rotateAndScaleIntrinsics(source, rotation, w, h)
+            val restored = FrameConversion.rotateAndScaleIntrinsics(
+                rotated, (360 - rotation) % 360, source.width, source.height
+            )
+            assertEquals(source.fx, restored.fx, 1e-9)
+            assertEquals(source.fy, restored.fy, 1e-9)
+            assertEquals(source.cx, restored.cx, 1e-9)
+            assertEquals(source.cy, restored.cy, 1e-9)
+            assertEquals(source.width, restored.width)
+            assertEquals(source.height, restored.height)
+        }
+    }
+
+    @Test
+    fun `pixel rotation and camera basis preserve every world ray`() {
+        val identity = PoseWire(
+            R = listOf(
+                listOf(1.0, 0.0, 0.0),
+                listOf(0.0, 1.0, 0.0),
+                listOf(0.0, 0.0, 1.0),
+            ),
+            t = listOf(1.0, 2.0, 3.0),
+        )
+        val oldRay = doubleArrayOf(0.17, -0.09, -1.4)
+        for (rotation in listOf(0, 90, 180, 270)) {
+            val newRay = when (rotation) {
+                0 -> oldRay
+                90 -> doubleArrayOf(oldRay[1], -oldRay[0], oldRay[2])
+                180 -> doubleArrayOf(-oldRay[0], -oldRay[1], oldRay[2])
+                else -> doubleArrayOf(-oldRay[1], oldRay[0], oldRay[2])
+            }
+            val pose = FrameConversion.rotateCameraAxes(identity, rotation)
+            val world = DoubleArray(3) { row ->
+                pose.t[row] + (0 until 3).sumOf { col -> pose.R[row][col] * newRay[col] }
+            }
+            for (axis in 0 until 3) {
+                assertEquals(
+                    "world ray axis $axis at $rotation degrees",
+                    identity.t[axis] + oldRay[axis],
+                    world[axis],
+                    1e-9,
+                )
+            }
+        }
+    }
+
+    @Test
     fun `serialised json uses the wire field names the harness expects`() {
         val bundle = SessionBundleWire(
             sessionId = "s", roomId = "r",

@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Capture panorama</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #0d0d0f; color: #e6e6e6; overflow: hidden;
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  #stage { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+           touch-action: none; cursor: grab; }
+  #stage.dragging { cursor: grabbing; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  .bar {
+    position: fixed; left: 0; right: 0; top: 0; z-index: 2;
+    display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+    padding: 10px 14px; background: linear-gradient(#000000cc, #00000000);
+    pointer-events: none;
+  }
+  .bar strong { font-weight: 600; font-size: 14px; }
+  .bar span { color: #9a9aa2; }
+  .bar code { color: #8ab4ff; }
+
+  .controls {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 2;
+    display: flex; gap: 8px; align-items: center; justify-content: center;
+    padding: 12px; background: linear-gradient(#00000000, #000000cc);
+  }
+  button, select {
+    background: #1c1c22; color: #e6e6e6; border: 1px solid #33333d;
+    border-radius: 7px; padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover, select:hover { background: #26262e; }
+  .hint { position: fixed; bottom: 62px; width: 100%; text-align: center;
+          color: #8a8a93; z-index: 2; pointer-events: none;
+          text-shadow: 0 1px 3px #000; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <strong id="title">panorama</strong>
+  <span id="meta"></span>
+</div>
+
+<div id="stage"><canvas id="c"></canvas></div>
+
+<div class="hint">drag or arrows to pan · scroll / pinch to zoom · [ ] to switch capture · double-click to reset</div>
+<div class="controls">
+  <select id="pick"></select>
+  <button id="fit">Whole image</button>
+  <button id="reset">Reset</button>
+</div>
+
+<script>
+// A panorama viewer with no dependencies.
+//
+// The source is a cylindrical projection out of OpenCV's stitcher, so panning
+// is a translation across the image rather than a rotation of a sphere — but
+// the interaction that matters is the same: drag to look around, zoom to
+// inspect. Rendering through a canvas rather than CSS transforms keeps the
+// image crisp when zoomed and makes the clamping honest at any scale.
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const stage = document.getElementById('stage');
+
+let img = null;
+let scale = 1, minScale = 1;
+let ox = 0, oy = 0;            // top-left of the image in view space
+let dragging = false, lastX = 0, lastY = 0;
+
+// Measured off the window, not the element: on first paint the element can
+// still report a stale height, and drawing to that leaves a dead strip.
+function vw() { return window.innerWidth; }
+function vh() { return window.innerHeight; }
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width = vw() + 'px';
+  canvas.style.height = vh() + 'px';
+  canvas.width = Math.round(vw() * dpr);
+  canvas.height = Math.round(vh() * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (img) { clamp(); draw(); }
+}
+
+// Two different scales, and confusing them is what made the viewer unpannable.
+//
+//   contain — the whole image inside the viewport. Nothing overflows, so there
+//             is nothing to drag. This is the *floor* for zooming out, not the
+//             view to start on.
+//   cover   — the image fills the viewport, overflowing on at least one axis.
+//             Panning is only meaningful past this point.
+//
+// Starting at `contain` on a near-square panorama left it smaller than the
+// window in both directions, clamp() centred it, and every drag was a no-op.
+function containScale() {
+  return Math.min(vw() / img.width, vh() / img.height);
+}
+function coverScale() {
+  return Math.max(vw() / img.width, vh() / img.height);
+}
+
+function fit(zoomed = true) {
+  if (!img) return;
+  minScale = containScale();
+  // A little past cover, so both axes have somewhere to go on the first drag.
+  scale = zoomed ? coverScale() * 1.25 : minScale;
+  ox = (vw() - img.width * scale) / 2;
+  oy = (vh() - img.height * scale) / 2;
+  clamp(); draw();
+}
+
+// A panorama that closes the loop should keep turning past its own seam,
+// the way the room does. Judged on aspect ratio: a strip several times wider
+// than it is tall came from a sweep all the way round, whereas a near-square
+// mosaic is one corner and must stay bounded or it drifts into empty space.
+let current = null;
+function wraps() {
+  if (!img) return false;
+  if (current && typeof current.wrap === 'boolean') return current.wrap;
+  return img.width / img.height >= 2.6;
+}
+
+function clamp() {
+  const w = vw(), h = vh();
+  const iw = img.width * scale, ih = img.height * scale;
+  if (wraps()) {
+    // Horizontal position is free; it is normalised into one image width so
+    // the offset cannot run away over a long pan.
+    ox = ((ox % iw) + iw) % iw - iw;
+  } else {
+    ox = iw <= w ? (w - iw) / 2 : Math.min(0, Math.max(w - iw, ox));
+  }
+  oy = ih <= h ? (h - ih) / 2 : Math.min(0, Math.max(h - ih, oy));
+}
+
+function draw() {
+  ctx.fillStyle = '#0d0d0f';
+  ctx.fillRect(0, 0, vw(), vh());
+  if (!img) return;
+  ctx.imageSmoothingQuality = 'high';
+  const iw = img.width * scale, ih = img.height * scale;
+  ctx.drawImage(img, ox, oy, iw, ih);
+  // Repeat until the viewport is covered, so the seam passes by rather than
+  // ending the pan.
+  if (wraps()) {
+    for (let x = ox + iw; x < vw(); x += iw) ctx.drawImage(img, x, oy, iw, ih);
+    for (let x = ox - iw; x + iw > 0; x -= iw) ctx.drawImage(img, x, oy, iw, ih);
+  }
+}
+
+function zoomAt(cx, cy, factor) {
+  const next = Math.min(8, Math.max(minScale, scale * factor));
+  if (next === scale) return;
+  // Keep the point under the cursor fixed, which is what makes zoom feel
+  // like inspecting rather than jumping.
+  ox = cx - (cx - ox) * (next / scale);
+  oy = cy - (cy - oy) * (next / scale);
+  scale = next;
+  clamp(); draw();
+}
+
+stage.addEventListener('pointerdown', e => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  stage.classList.add('dragging');
+  stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  ox += e.clientX - lastX; oy += e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  clamp(); draw();
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  stage.addEventListener(ev, e => {
+    dragging = false;
+    stage.classList.remove('dragging');
+  });
+}
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+}, { passive: false });
+stage.addEventListener('dblclick', () => fit(true));
+
+// Pinch, for looking at this on the phone that shot it.
+const pointers = new Map();
+let pinchStart = 0, pinchScale = 1;
+stage.addEventListener('pointerdown', e => pointers.set(e.pointerId, e));
+stage.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, e);
+  if (pointers.size !== 2) return;
+  const [a, b] = [...pointers.values()];
+  const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  if (!pinchStart) { pinchStart = dist; pinchScale = scale; return; }
+  const mx = (a.clientX + b.clientX) / 2, my = (a.clientY + b.clientY) / 2;
+  const target = pinchScale * (dist / pinchStart);
+  zoomAt(mx, my, target / scale);
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  stage.addEventListener(ev, e => { pointers.delete(e.pointerId); pinchStart = 0; });
+}
+
+// "Whole image" zooms out to contain; "Reset" returns to the pannable default.
+document.getElementById('fit').onclick = () => fit(false);
+document.getElementById('reset').onclick = () => fit(true);
+window.addEventListener('resize', () => { resize(); });
+
+// Arrow keys, for panning without a drag.
+window.addEventListener('keydown', e => {
+  const step = e.shiftKey ? 200 : 60;
+  const moves = { ArrowLeft: [step, 0], ArrowRight: [-step, 0],
+                  ArrowUp: [0, step], ArrowDown: [0, -step] };
+  const m = moves[e.key];
+  if (!m) return;
+  e.preventDefault();
+  ox += m[0]; oy += m[1];
+  clamp(); draw();
+});
+
+// --- sources -------------------------------------------------------------
+const pick = document.getElementById('pick');
+
+function load(src, label, meta) {
+  const next = new Image();
+  next.onload = () => {
+    img = next;
+    // Re-measure first: on a cold load the image can arrive before the fixed
+    // layout has settled, and fitting to a stale viewport leaves a dead band.
+    resize();
+    document.getElementById('title').textContent = label;
+    document.getElementById('meta').innerHTML = meta +
+      ` · <code>${img.width}×${img.height}</code>` +
+      (wraps() ? ' · <code>360° wrap</code>' : '');
+    fit();
+  };
+  next.onerror = () => {
+    document.getElementById('meta').textContent = 'not built yet — reload shortly';
+  };
+  next.src = src + '?t=' + Date.now();
+}
+
+// Sources come from the manifest the stitcher writes, so adding a capture
+// needs no edit here — the two cannot drift out of step.
+let SOURCES = [];
+
+async function loadManifest() {
+  try {
+    const res = await fetch('sessions/manifest.json?t=' + Date.now());
+    SOURCES = await res.json();
+  } catch (e) {
+    SOURCES = [];
+  }
+  pick.innerHTML = '';
+  if (!SOURCES.length) {
+    document.getElementById('meta').textContent = 'no mosaics built yet';
+    return;
+  }
+  SOURCES.forEach((s, i) => {
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = `${s.label}  (${(s.meta.match(/^\d+/) || ['?'])[0]} frames)`;
+    pick.appendChild(o);
+  });
+  // A full 360 is the one worth opening on; otherwise the biggest capture.
+  let first = SOURCES.findIndex(s => s.equirect);
+  if (first < 0) {
+    first = SOURCES.reduce((best, s, i) =>
+      parseInt(s.meta) > parseInt(SOURCES[best].meta) ? i : best, 0);
+  }
+  pick.value = first;
+  show(first);
+}
+
+function show(i) {
+  const s = SOURCES[i];
+  current = s;
+  load(s.file, s.label, s.meta);
+}
+
+pick.onchange = () => show(pick.value);
+
+// Left/right through the captures, so comparing them is one keypress.
+window.addEventListener('keydown', e => {
+  if (e.key !== '[' && e.key !== ']') return;
+  const n = SOURCES.length;
+  if (!n) return;
+  pick.value = ((+pick.value + (e.key === ']' ? 1 : -1)) % n + n) % n;
+  show(pick.value);
+});
+
+resize();
+loadManifest();
+window.addEventListener('load', () => { resize(); if (img) fit(); });
+</script>
+</body>
+</html>

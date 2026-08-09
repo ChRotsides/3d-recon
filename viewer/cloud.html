@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Point cloud — DA3</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #08080a; color: #e6e6e6; overflow: hidden;
+         font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  canvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+           display: block; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+
+  .bar { position: fixed; left: 0; right: 0; top: 0; z-index: 2;
+         display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+         padding: 10px 14px; background: linear-gradient(#000000cc, #00000000);
+         pointer-events: none; }
+  .bar strong { font-weight: 600; font-size: 14px; }
+  .bar span { color: #9a9aa2; }
+  .bar code { color: #8ab4ff; }
+
+  .controls { position: fixed; bottom: 0; left: 0; right: 0; z-index: 2;
+              display: flex; gap: 10px; align-items: center; justify-content: center;
+              flex-wrap: wrap; padding: 12px;
+              background: linear-gradient(#00000000, #000000d0); }
+  button, a.btn { background: #1c1c22; color: #e6e6e6; border: 1px solid #33333d;
+                  border-radius: 7px; padding: 8px 13px; font: inherit;
+                  cursor: pointer; text-decoration: none; }
+  button:hover, a.btn:hover { background: #26262e; }
+  button.on { background: #2b4a7d; border-color: #3f6cb5; }
+  label { display: flex; gap: 7px; align-items: center; color: #9a9aa2; }
+  input[type=range] { width: 130px; }
+  .hint { position: fixed; bottom: 64px; width: 100%; text-align: center;
+          color: #7a7a83; z-index: 2; pointer-events: none;
+          text-shadow: 0 1px 3px #000; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <strong>DA3 point cloud</strong>
+  <span id="meta">loading…</span>
+</div>
+
+<canvas id="c"></canvas>
+
+<div class="hint">drag to orbit · scroll to zoom · shift-drag or right-drag to pan</div>
+<div class="controls">
+  <button id="tex" class="on">Texture: on</button>
+  <label>point <input id="size" type="range" min="1" max="60" step="1" value="10">
+    <span id="sizeval">10 mm</span></label>
+  <button id="reset">Reset view</button>
+  <a class="btn" href="/">← panoramas</a>
+</div>
+
+<script>
+// A point-cloud viewer with no dependencies.
+//
+// The cloud arrives as one flat buffer — float32 xyz then uint8 rgb — so it
+// goes straight into GPU buffers with no parsing. At ~900k points that matters:
+// a PLY text parse would cost more than the download.
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: true })
+        || canvas.getContext('webgl', { antialias: true });
+if (!gl) document.getElementById('meta').textContent = 'WebGL unavailable';
+
+const VERT = `
+attribute vec3 aPos;
+attribute vec3 aCol;
+uniform mat4 uMVP;
+uniform float uRadius;   // point radius in metres
+uniform float uFocalPx;  // pixels per radian-ish, from the projection
+uniform float uTex;      // 1 = photographic colour, 0 = shaded by height
+uniform float uYMin;
+uniform float uYRange;
+varying vec3 vCol;
+void main() {
+  gl_Position = uMVP * vec4(aPos, 1.0);
+  // A point is a disc of uRadius metres, projected properly: its pixel size
+  // is radius * focal / depth. The previous form multiplied by an arbitrary
+  // 300, which at a 12 m view made every point 60 pixels across — nearly a
+  // million overlapping blobs, i.e. a solid wall of colour.
+  gl_PointSize = clamp(uRadius * uFocalPx / max(gl_Position.w, 0.001), 1.0, 64.0);
+  // Height ramp for the untextured view: geometry is far easier to read as
+  // shape when colour is not competing with it.
+  float h = clamp((aPos.y - uYMin) / max(uYRange, 0.001), 0.0, 1.0);
+  vec3 shaded = mix(vec3(0.16, 0.24, 0.38), vec3(0.85, 0.90, 0.98), h);
+  vCol = mix(shaded, aCol, uTex);
+}`;
+
+const FRAG = `
+precision mediump float;
+varying vec3 vCol;
+void main() {
+  // Round points; square ones alias into a grid pattern at these densities.
+  vec2 d = gl_PointCoord - vec2(0.5);
+  if (dot(d, d) > 0.25) discard;
+  gl_FragColor = vec4(vCol, 1.0);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s);
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const uMVP = gl.getUniformLocation(prog, 'uMVP');
+const uRadius = gl.getUniformLocation(prog, 'uRadius');
+const uFocalPx = gl.getUniformLocation(prog, 'uFocalPx');
+const uTex = gl.getUniformLocation(prog, 'uTex');
+const uYMin = gl.getUniformLocation(prog, 'uYMin');
+const uYRange = gl.getUniformLocation(prog, 'uYRange');
+
+let count = 0, centre = [0, 0, 0], radius = 5;
+let yaw = 0.6, pitch = 0.25, dist = 12;
+let panX = 0, panY = 0;
+let textured = true, pointRadiusM = 0.010;   // 1 cm discs
+
+// --- minimal matrix maths ------------------------------------------------
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0];
+}
+function lookAt(eye, tgt, up) {
+  const z = norm(sub(eye, tgt)), x = norm(cross(up, z)), y = cross(z, x);
+  return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
+          -dot(x,eye), -dot(y,eye), -dot(z,eye), 1];
+}
+const sub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+function norm(v) { const l = Math.hypot(...v) || 1; return [v[0]/l, v[1]/l, v[2]/l]; }
+function mul(a, b) {
+  const o = new Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    o[i*4+j] = a[j]*b[i*4] + a[4+j]*b[i*4+1] + a[8+j]*b[i*4+2] + a[12+j]*b[i*4+3];
+  }
+  return o;
+}
+
+function draw() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(window.innerWidth * dpr), h = Math.round(window.innerHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.03, 0.03, 0.04, 1);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  if (!count) return;
+
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const eye = [
+    centre[0] + panX + dist * cp * Math.sin(yaw),
+    centre[1] + panY + dist * sp,
+    centre[2] + dist * cp * Math.cos(yaw),
+  ];
+  const target = [centre[0] + panX, centre[1] + panY, centre[2]];
+  const proj = perspective(Math.PI / 3, canvas.width / canvas.height, 0.05, radius * 60);
+  gl.uniformMatrix4fv(uMVP, false, new Float32Array(mul(proj, lookAt(eye, target, [0,1,0]))));
+  // Focal length in pixels for the current viewport, so a point keeps its
+  // physical size whatever the window or the zoom does.
+  const focalPx = canvas.height / (2.0 * Math.tan(Math.PI / 6));
+  gl.uniform1f(uRadius, pointRadiusM);
+  gl.uniform1f(uFocalPx, focalPx);
+  gl.uniform1f(uTex, textured ? 1 : 0);
+  gl.drawArrays(gl.POINTS, 0, count);
+}
+
+function frame() { draw(); requestAnimationFrame(frame); }
+
+// --- interaction ---------------------------------------------------------
+let dragging = false, panning = false, lastX = 0, lastY = 0;
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', e => {
+  dragging = true;
+  panning = e.button === 2 || e.shiftKey;
+  lastX = e.clientX; lastY = e.clientY;
+  canvas.classList.add('dragging');
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  if (panning) {
+    panX -= dx * dist * 0.0016;
+    panY += dy * dist * 0.0016;
+  } else {
+    yaw -= dx * 0.006;
+    // Stop just short of the poles, where the up vector degenerates.
+    pitch = Math.max(-1.5, Math.min(1.5, pitch + dy * 0.006));
+  }
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  canvas.addEventListener(ev, () => { dragging = false; canvas.classList.remove('dragging'); });
+}
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  dist = Math.max(0.2, Math.min(radius * 20, dist * (e.deltaY < 0 ? 0.88 : 1.14)));
+}, { passive: false });
+
+const texBtn = document.getElementById('tex');
+texBtn.onclick = () => {
+  textured = !textured;
+  texBtn.textContent = 'Texture: ' + (textured ? 'on' : 'off');
+  texBtn.classList.toggle('on', textured);
+};
+document.getElementById('size').oninput = e => {
+  const mm = parseFloat(e.target.value);
+  pointRadiusM = mm / 1000.0;
+  document.getElementById('sizeval').textContent = mm + ' mm';
+};
+function resetView() {
+  yaw = 0.6; pitch = 0.25; dist = radius * 2.2; panX = 0; panY = 0;
+}
+document.getElementById('reset').onclick = resetView;
+window.addEventListener('keydown', e => {
+  if (e.key === 't' || e.key === 'T') texBtn.click();
+  if (e.key === 'r' || e.key === 'R') resetView();
+});
+
+// --- load ----------------------------------------------------------------
+(async () => {
+  const meta = await (await fetch('cloud.json?t=' + Date.now())).json();
+  const buf = await (await fetch('cloud.bin?t=' + Date.now())).arrayBuffer();
+  count = meta.count;
+  const pos = new Float32Array(buf, 0, count * 3);
+  const col = new Uint8Array(buf, count * 12, count * 3);
+
+  centre = meta.centre;
+  radius = Math.max(...meta.extent) * 0.5;
+  resetView();
+
+  const pb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+  gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+  const cb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+  gl.bufferData(gl.ARRAY_BUFFER, col, gl.STATIC_DRAW);
+  const aCol = gl.getAttribLocation(prog, 'aCol');
+  gl.enableVertexAttribArray(aCol);
+  gl.vertexAttribPointer(aCol, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+
+  gl.uniform1f(uYMin, meta.min[1]);
+  gl.uniform1f(uYRange, meta.max[1] - meta.min[1]);
+
+  document.getElementById('meta').innerHTML =
+    `${count.toLocaleString()} points · ${meta.keyframes} keyframes · ` +
+    `<code>${meta.model}</code> · extent ` +
+    `<code>${meta.extent.map(v => v.toFixed(1)).join(' × ')} m</code>`;
+  frame();
+})();
+</script>
+</body>
+</html>

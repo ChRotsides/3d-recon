@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Mesh — TSDF</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #08080a; color: #e6e6e6; overflow: hidden;
+         font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  canvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+           display: block; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+
+  .bar { position: fixed; left: 0; right: 0; top: 0; z-index: 2;
+         display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+         padding: 10px 14px; background: linear-gradient(#000000cc, #00000000);
+         pointer-events: none; }
+  .bar strong { font-weight: 600; font-size: 14px; }
+  .bar span { color: #9a9aa2; }
+  .bar code { color: #8ab4ff; }
+
+  .controls { position: fixed; bottom: 0; left: 0; right: 0; z-index: 2;
+              display: flex; gap: 10px; align-items: center; justify-content: center;
+              flex-wrap: wrap; padding: 12px;
+              background: linear-gradient(#00000000, #000000d0); }
+  button, a.btn { background: #1c1c22; color: #e6e6e6; border: 1px solid #33333d;
+                  border-radius: 7px; padding: 8px 13px; font: inherit;
+                  cursor: pointer; text-decoration: none; }
+  button:hover, a.btn:hover { background: #26262e; }
+  button.on { background: #2b4a7d; border-color: #3f6cb5; }
+  .hint { position: fixed; bottom: 64px; width: 100%; text-align: center;
+          color: #7a7a83; z-index: 2; pointer-events: none;
+          text-shadow: 0 1px 3px #000; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <strong>TSDF mesh</strong>
+  <span id="meta">loading…</span>
+</div>
+
+<canvas id="c"></canvas>
+
+<div class="hint">drag to orbit · scroll to zoom · shift-drag or right-drag to pan</div>
+<div class="controls">
+  <button id="tex" class="on">Texture: on</button>
+  <button id="wire">Wireframe</button>
+  <button id="cull">Backfaces: on</button>
+  <button id="reset">Reset view</button>
+  <a class="btn" href="cloud.html">point cloud →</a>
+</div>
+
+<script>
+// A mesh viewer with no dependencies, sibling to cloud.html and sharing its
+// camera behaviour so switching between the two is not a re-orientation.
+//
+// The mesh arrives as one flat buffer, laid out to go straight into GPU
+// buffers with no parsing:
+//   float32 xyz[3V] · float32 normal[3V] · uint8 rgb[3V] · uint32 index[3T]
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: true })
+        || canvas.getContext('webgl', { antialias: true });
+if (!gl) document.getElementById('meta').textContent = 'WebGL unavailable';
+// 32-bit indices are not optional here: 315k vertices overflows uint16 more
+// than four times over, and the failure mode without the extension is a mesh
+// folded onto itself rather than an error.
+const uintExt = gl.getExtension('OES_element_index_uint');
+const isGL2 = !!(window.WebGL2RenderingContext && gl instanceof WebGL2RenderingContext);
+
+const VERT = `
+attribute vec3 aPos;
+attribute vec3 aNrm;
+attribute vec3 aCol;
+uniform mat4 uMVP;
+uniform float uTex;
+uniform float uYMin;
+uniform float uYRange;
+varying vec3 vCol;
+varying vec3 vNrm;
+void main() {
+  gl_Position = uMVP * vec4(aPos, 1.0);
+  vNrm = aNrm;
+  float h = clamp((aPos.y - uYMin) / max(uYRange, 0.001), 0.0, 1.0);
+  vec3 shaded = mix(vec3(0.16, 0.24, 0.38), vec3(0.85, 0.90, 0.98), h);
+  vCol = mix(shaded, aCol, uTex);
+}`;
+
+const FRAG = `
+precision mediump float;
+varying vec3 vCol;
+varying vec3 vNrm;
+uniform float uWire;
+void main() {
+  // Two fixed lights and a floor bounce. A single headlight flattens a room:
+  // every surface facing the camera gets the same value, which is exactly the
+  // surfaces you are trying to tell apart.
+  vec3 n = normalize(vNrm);
+  float key  = max(dot(n, normalize(vec3( 0.4, 0.85,  0.35))), 0.0);
+  float fill = max(dot(n, normalize(vec3(-0.6, 0.25, -0.55))), 0.0);
+  float bounce = max(dot(n, vec3(0.0, -1.0, 0.0)), 0.0);
+  float light = 0.30 + 0.62 * key + 0.22 * fill + 0.10 * bounce;
+  vec3 c = mix(vCol * light, vec3(0.55, 0.75, 1.0), uWire);
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s);
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const uMVP = gl.getUniformLocation(prog, 'uMVP');
+const uTex = gl.getUniformLocation(prog, 'uTex');
+const uWire = gl.getUniformLocation(prog, 'uWire');
+const uYMin = gl.getUniformLocation(prog, 'uYMin');
+const uYRange = gl.getUniformLocation(prog, 'uYRange');
+
+let indexCount = 0, wireCount = 0, centre = [0, 0, 0], radius = 5;
+let solidBuffer = null, wireBuffer = null;
+let yaw = 0.6, pitch = 0.25, dist = 12;
+let panX = 0, panY = 0;
+let textured = true, wireframe = false, culling = true;
+
+// --- minimal matrix maths (identical to cloud.html) ----------------------
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0];
+}
+function lookAt(eye, tgt, up) {
+  const z = norm(sub(eye, tgt)), x = norm(cross(up, z)), y = cross(z, x);
+  return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
+          -dot(x,eye), -dot(y,eye), -dot(z,eye), 1];
+}
+const sub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+function norm(v) { const l = Math.hypot(...v) || 1; return [v[0]/l, v[1]/l, v[2]/l]; }
+function mul(a, b) {
+  const o = new Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    o[i*4+j] = a[j]*b[i*4] + a[4+j]*b[i*4+1] + a[8+j]*b[i*4+2] + a[12+j]*b[i*4+3];
+  }
+  return o;
+}
+
+function draw() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(window.innerWidth * dpr), h = Math.round(window.innerHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.03, 0.03, 0.04, 1);
+  gl.enable(gl.DEPTH_TEST);
+  // Backface culling off by default would be wrong, but it must be switchable:
+  // standing *inside* a room means looking at the inside of its walls, and a
+  // TSDF surface has a definite outside. Culling on is right for inspecting
+  // the shell, off for standing in the middle of it.
+  if (culling) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+  else gl.disable(gl.CULL_FACE);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  if (!indexCount) return;
+
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const eye = [
+    centre[0] + panX + dist * cp * Math.sin(yaw),
+    centre[1] + panY + dist * sp,
+    centre[2] + dist * cp * Math.cos(yaw),
+  ];
+  const target = [centre[0] + panX, centre[1] + panY, centre[2]];
+  const proj = perspective(Math.PI / 3, canvas.width / canvas.height, 0.05, radius * 60);
+  gl.uniformMatrix4fv(uMVP, false, new Float32Array(mul(proj, lookAt(eye, target, [0,1,0]))));
+  gl.uniform1f(uTex, textured ? 1 : 0);
+  gl.uniform1f(uWire, wireframe ? 1 : 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireframe ? wireBuffer : solidBuffer);
+  gl.drawElements(wireframe ? gl.LINES : gl.TRIANGLES,
+                  wireframe ? wireCount : indexCount, gl.UNSIGNED_INT, 0);
+}
+
+function frame() { draw(); requestAnimationFrame(frame); }
+
+// --- interaction (identical to cloud.html) -------------------------------
+let dragging = false, panning = false, lastX = 0, lastY = 0;
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', e => {
+  dragging = true;
+  panning = e.button === 2 || e.shiftKey;
+  lastX = e.clientX; lastY = e.clientY;
+  canvas.classList.add('dragging');
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  if (panning) { panX -= dx * dist * 0.0016; panY += dy * dist * 0.0016; }
+  else { yaw -= dx * 0.006; pitch = Math.max(-1.5, Math.min(1.5, pitch + dy * 0.006)); }
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  canvas.addEventListener(ev, () => { dragging = false; canvas.classList.remove('dragging'); });
+}
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  dist = Math.max(0.05, Math.min(radius * 20, dist * (e.deltaY < 0 ? 0.88 : 1.14)));
+}, { passive: false });
+
+const texBtn = document.getElementById('tex');
+texBtn.onclick = () => {
+  textured = !textured;
+  texBtn.textContent = 'Texture: ' + (textured ? 'on' : 'off');
+  texBtn.classList.toggle('on', textured);
+};
+const wireBtn = document.getElementById('wire');
+wireBtn.onclick = () => {
+  wireframe = !wireframe;
+  wireBtn.classList.toggle('on', wireframe);
+};
+const cullBtn = document.getElementById('cull');
+cullBtn.onclick = () => {
+  culling = !culling;
+  cullBtn.textContent = 'Backfaces: ' + (culling ? 'on' : 'off');
+  cullBtn.classList.toggle('on', culling);
+};
+function resetView() {
+  yaw = 0.6; pitch = 0.25; dist = radius * 2.2; panX = 0; panY = 0;
+}
+document.getElementById('reset').onclick = resetView;
+window.addEventListener('keydown', e => {
+  if (e.key === 't' || e.key === 'T') texBtn.click();
+  if (e.key === 'w' || e.key === 'W') wireBtn.click();
+  if (e.key === 'b' || e.key === 'B') cullBtn.click();
+  if (e.key === 'r' || e.key === 'R') resetView();
+});
+
+// --- load ----------------------------------------------------------------
+(async () => {
+  if (!isGL2 && !uintExt) {
+    document.getElementById('meta').textContent =
+      'This browser has no 32-bit mesh indices (WebGL2 or OES_element_index_uint).';
+    return;
+  }
+  // A base supplied in the URL lets one viewer inspect several builds without
+  // copying large binary files into this directory. The historical local
+  // mesh.json/mesh.bin pair remains the default.
+  const dataBase = new URLSearchParams(location.search).get('base') || 'mesh';
+  const meta = await (await fetch(dataBase + '.json?t=' + Date.now())).json();
+  const buf = await (await fetch(dataBase + '.bin?t=' + Date.now())).arrayBuffer();
+  const V = meta.vertices, T = meta.triangles;
+  const expected = V * 12 + V * 12 + V * 3 + T * 12;
+  if (buf.byteLength !== expected) {
+    document.getElementById('meta').textContent =
+      `mesh.bin is ${buf.byteLength} bytes, expected ${expected} — stale file?`;
+    return;
+  }
+  const pos = new Float32Array(buf, 0, V * 3);
+  const nrm = new Float32Array(buf, V * 12, V * 3);
+  const idx = new Uint32Array(buf, V * 24, T * 3);
+  const col = new Uint8Array(buf, V * 24 + T * 12, V * 3);
+
+  centre = meta.centre;
+  radius = Math.max(...meta.extent) * 0.5;
+  resetView();
+
+  function attrib(name, data, size, type, normalized) {
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, name);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, type, normalized, 0, 0);
+  }
+  attrib('aPos', pos, 3, gl.FLOAT, false);
+  attrib('aNrm', nrm, 3, gl.FLOAT, false);
+  attrib('aCol', col, 3, gl.UNSIGNED_BYTE, true);
+
+  // Triangle indices, plus the edge list the wireframe draws. Built once here
+  // rather than per frame — three LINES pairs per triangle.
+  const edges = new Uint32Array(T * 6);
+  for (let t = 0; t < T; t++) {
+    const a = idx[t*3], b = idx[t*3+1], c = idx[t*3+2];
+    edges.set([a,b, b,c, c,a], t * 6);
+  }
+  indexCount = T * 3;
+  wireCount = T * 6;
+
+  // Two index buffers; draw() binds whichever the toggle currently wants,
+  // rather than the toggle reaching in to rebind and having to know it runs
+  // after the flag has already flipped.
+  solidBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, solidBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  wireBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, edges, gl.STATIC_DRAW);
+
+  gl.uniform1f(uYMin, meta.min[1]);
+  gl.uniform1f(uYRange, meta.max[1] - meta.min[1]);
+
+  document.getElementById('meta').innerHTML =
+    `${T.toLocaleString()} triangles · ${V.toLocaleString()} vertices · ` +
+    `${meta.keyframes} keyframes · <code>${meta.model}</code> · ` +
+    `${(meta.voxel_m * 100).toFixed(0)} cm voxels · extent ` +
+    `<code>${meta.extent.map(v => v.toFixed(1)).join(' × ')} m</code>`;
+  frame();
+})();
+</script>
+</body>
+</html>

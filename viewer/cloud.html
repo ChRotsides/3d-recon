@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Point cloud — DA3</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
+  html, body { height: 100%; margin: 0; overscroll-behavior: none; }
   body { background: #08080a; color: #e6e6e6; overflow: hidden;
          font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
   canvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
@@ -23,19 +23,68 @@
   .bar code { color: #8ab4ff; }
 
   .controls { position: fixed; bottom: 0; left: 0; right: 0; z-index: 2;
-              display: flex; gap: 10px; align-items: center; justify-content: center;
-              flex-wrap: wrap; padding: 12px;
+              display: flex; flex-direction: column; gap: 8px; align-items: center;
+              padding: 12px max(12px, env(safe-area-inset-right))
+                       max(12px, env(safe-area-inset-bottom))
+                       max(12px, env(safe-area-inset-left));
               background: linear-gradient(#00000000, #000000d0); }
+  .row { display: flex; gap: 10px; align-items: center; justify-content: center;
+         flex-wrap: wrap; }
+  .row .val { color: #8ab4ff; font-variant-numeric: tabular-nums;
+              min-width: 62px; display: inline-block; }
+  select { background: #1c1c22; color: #e6e6e6; border: 1px solid #33333d;
+           border-radius: 7px; padding: 6px 8px; font: inherit; }
   button, a.btn { background: #1c1c22; color: #e6e6e6; border: 1px solid #33333d;
                   border-radius: 7px; padding: 8px 13px; font: inherit;
                   cursor: pointer; text-decoration: none; }
   button:hover, a.btn:hover { background: #26262e; }
   button.on { background: #2b4a7d; border-color: #3f6cb5; }
+  .panel-toggle { display: none; }
   label { display: flex; gap: 7px; align-items: center; color: #9a9aa2; }
   input[type=range] { width: 130px; }
-  .hint { position: fixed; bottom: 64px; width: 100%; text-align: center;
+  /* Clears the three-row control panel; at 64px it sat across the slice row. */
+  .hint { position: fixed; bottom: 152px; width: 100%; text-align: center;
           color: #7a7a83; z-index: 2; pointer-events: none;
           text-shadow: 0 1px 3px #000; }
+  .mobile-hint { display: none; }
+
+  @media (max-width: 720px), (pointer: coarse) {
+    body { font-size: 14px; }
+    .bar { align-items: center; gap: 4px 10px;
+           padding: max(8px, env(safe-area-inset-top))
+                    max(10px, env(safe-area-inset-right)) 12px
+                    max(10px, env(safe-area-inset-left)); }
+    .bar strong { font-size: 13px; }
+    .bar span { width: 100%; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; font-size: 11px; }
+    .desktop-hint { display: none; }
+    .mobile-hint { display: inline; }
+    .hint { top: calc(max(8px, env(safe-area-inset-top)) + 49px); bottom: auto;
+            padding: 0 10px; font-size: 12px; color: #a0a0aa; }
+    .controls { max-height: min(58svh, 520px); overflow-y: auto;
+                overscroll-behavior: contain; align-items: stretch; gap: 12px;
+                padding-top: 8px; background: #0c0c10ee;
+                border-top: 1px solid #33333d; border-radius: 16px 16px 0 0;
+                transition: transform 160ms ease-out; }
+    .controls.collapsed { left: auto; width: auto; max-height: none;
+                          overflow: visible; padding: 0
+                            max(10px, env(safe-area-inset-right))
+                            max(10px, env(safe-area-inset-bottom)) 0;
+                          background: transparent; border: 0; }
+    .controls.collapsed .row { display: none; }
+    .panel-toggle { display: block; align-self: center; min-height: 46px;
+                    min-width: 116px; border-radius: 23px;
+                    background: #202128ee; box-shadow: 0 3px 16px #0009; }
+    .controls:not(.collapsed) .panel-toggle { position: sticky; top: 0;
+                                              z-index: 1; }
+    .row { display: grid; grid-template-columns: 1fr; gap: 10px;
+           align-items: stretch; justify-items: stretch; }
+    .row label { min-height: 44px; justify-content: space-between;
+                 padding: 4px 2px; }
+    .row button, .row a.btn, select { min-height: 44px; font-size: 16px; }
+    input[type=range] { width: min(52vw, 250px); min-height: 40px; }
+    .row .val { min-width: 68px; text-align: right; }
+  }
 </style>
 </head>
 <body>
@@ -47,13 +96,38 @@
 
 <canvas id="c"></canvas>
 
-<div class="hint">drag to orbit · scroll to zoom · shift-drag or right-drag to pan</div>
-<div class="controls">
-  <button id="tex" class="on">Texture: on</button>
-  <label>point <input id="size" type="range" min="1" max="60" step="1" value="10">
-    <span id="sizeval">10 mm</span></label>
-  <button id="reset">Reset view</button>
-  <a class="btn" href="/">← panoramas</a>
+<div class="hint"><span class="desktop-hint">drag to orbit · scroll to zoom · shift-drag to pan · arrow keys sweep the slice · t texture · c clear cuts · r reset</span><span class="mobile-hint">one finger rotates · pinch zooms · two fingers pan · double-tap resets</span></div>
+<div class="controls" id="controls">
+  <button id="paneltoggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="controls">Hide controls</button>
+  <div class="row">
+    <button id="tex" class="on">Texture: on</button>
+    <label>point <input id="size" type="range" min="1" max="60" step="1" value="10">
+      <span class="val" id="sizeval">10 mm</span></label>
+    <label>density <input id="keep" type="range" min="2" max="100" step="1" value="100">
+      <span class="val" id="keepval">100%</span></label>
+  </div>
+  <div class="row">
+    <label>slice
+      <select id="axis">
+        <option value="0">off</option>
+        <option value="1">X</option>
+        <option value="2">Y — plan</option>
+        <option value="3">Z</option>
+      </select></label>
+    <label>at <input id="slicepos" type="range" min="0" max="1000" step="1" value="500">
+      <span class="val" id="sliceposval">—</span></label>
+    <label>thick <input id="slicethick" type="range" min="1" max="200" step="1" value="20">
+      <span class="val" id="slicethickval">20 cm</span></label>
+  </div>
+  <div class="row">
+    <label>ceiling <input id="ceil" type="range" min="0" max="1000" step="1" value="1000">
+      <span class="val" id="ceilval">—</span></label>
+    <label>far trim <input id="far" type="range" min="5" max="100" step="1" value="100">
+      <span class="val" id="farval">off</span></label>
+    <button id="clearcuts">Clear cuts</button>
+    <button id="reset">Reset view</button>
+    <a class="btn" href="/">← panoramas</a>
+  </div>
 </div>
 
 <script>
@@ -76,8 +150,36 @@ uniform float uFocalPx;  // pixels per radian-ish, from the projection
 uniform float uTex;      // 1 = photographic colour, 0 = shaded by height
 uniform float uYMin;
 uniform float uYRange;
+// Cuts. All of them hide points rather than change them, so nothing here can
+// misrepresent the geometry — what is on screen is always a subset of the file.
+uniform float uCeil;       // hide above this height
+uniform float uMaxDist;    // hide beyond this distance from the cloud centre
+uniform vec3  uCentre;
+uniform float uSliceAxis;  // 0 off, 1 X, 2 Y, 3 Z
+uniform float uSliceMin;
+uniform float uSliceMax;
+uniform float uKeep;       // fraction of points to draw, 0..1
 varying vec3 vCol;
 void main() {
+  bool hide = aPos.y > uCeil || distance(aPos, uCentre) > uMaxDist;
+  if (uSliceAxis > 0.5) {
+    float v = uSliceAxis < 1.5 ? aPos.x : (uSliceAxis < 2.5 ? aPos.y : aPos.z);
+    hide = hide || v < uSliceMin || v > uSliceMax;
+  }
+  if (uKeep < 0.999) {
+    // Hash the position rather than the vertex index: it needs no extra
+    // attribute buffer, works on WebGL 1, and — the part that matters when
+    // judging density — it is stable, so the same points stay hidden as the
+    // slider moves instead of the cloud reshuffling under you.
+    float h = fract(sin(dot(aPos, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    hide = hide || h > uKeep;
+  }
+  if (hide) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // outside the clip volume
+    gl_PointSize = 0.0;
+    vCol = vec3(0.0);
+    return;
+  }
   gl_Position = uMVP * vec4(aPos, 1.0);
   // A point is a disc of uRadius metres, projected properly: its pixel size
   // is radius * focal / depth. The previous form multiplied by an arbitrary
@@ -120,11 +222,22 @@ const uFocalPx = gl.getUniformLocation(prog, 'uFocalPx');
 const uTex = gl.getUniformLocation(prog, 'uTex');
 const uYMin = gl.getUniformLocation(prog, 'uYMin');
 const uYRange = gl.getUniformLocation(prog, 'uYRange');
+const uCeil = gl.getUniformLocation(prog, 'uCeil');
+const uMaxDist = gl.getUniformLocation(prog, 'uMaxDist');
+const uCentre = gl.getUniformLocation(prog, 'uCentre');
+const uSliceAxis = gl.getUniformLocation(prog, 'uSliceAxis');
+const uSliceMin = gl.getUniformLocation(prog, 'uSliceMin');
+const uSliceMax = gl.getUniformLocation(prog, 'uSliceMax');
+const uKeep = gl.getUniformLocation(prog, 'uKeep');
 
 let count = 0, centre = [0, 0, 0], radius = 5;
 let yaw = 0.6, pitch = 0.25, dist = 12;
 let panX = 0, panY = 0;
 let textured = true, pointRadiusM = 0.010;   // 1 cm discs
+let units = 'm';
+// Cut state, in metres. `bounds` is filled from the manifest at load.
+let bounds = { min: [-1, -1, -1], max: [1, 1, 1] };
+const cuts = { ceil: Infinity, maxDist: Infinity, axis: 0, slicePos: 0, sliceHalf: 0.10, keep: 1 };
 
 // --- minimal matrix maths ------------------------------------------------
 function perspective(fovy, aspect, near, far) {
@@ -173,23 +286,80 @@ function draw() {
   gl.uniform1f(uRadius, pointRadiusM);
   gl.uniform1f(uFocalPx, focalPx);
   gl.uniform1f(uTex, textured ? 1 : 0);
+  // 1e9 rather than Infinity: a non-finite uniform is undefined behaviour and
+  // silently blanks the cloud on some drivers.
+  gl.uniform1f(uCeil, Number.isFinite(cuts.ceil) ? cuts.ceil : 1e9);
+  gl.uniform1f(uMaxDist, Number.isFinite(cuts.maxDist) ? cuts.maxDist : 1e9);
+  gl.uniform3f(uCentre, centre[0], centre[1], centre[2]);
+  gl.uniform1f(uSliceAxis, cuts.axis);
+  gl.uniform1f(uSliceMin, cuts.slicePos - cuts.sliceHalf);
+  gl.uniform1f(uSliceMax, cuts.slicePos + cuts.sliceHalf);
+  gl.uniform1f(uKeep, cuts.keep);
   gl.drawArrays(gl.POINTS, 0, count);
 }
 
-function frame() { draw(); requestAnimationFrame(frame); }
+// The scene is static between interactions. Drawing only when something
+// changes keeps an 800k-point cloud responsive without heating a phone or
+// draining its battery while the user is simply inspecting the result.
+let renderPending = false;
+function requestDraw() {
+  if (renderPending) return;
+  renderPending = true;
+  requestAnimationFrame(() => { renderPending = false; draw(); });
+}
+window.addEventListener('resize', requestDraw);
 
 // --- interaction ---------------------------------------------------------
+// Pointer Events let the same controller handle mouse, pen, and true
+// multitouch. One touch orbits; two touches zoom and pan simultaneously.
+const pointers = new Map();
 let dragging = false, panning = false, lastX = 0, lastY = 0;
+let lastPinchDistance = 0, lastMidX = 0, lastMidY = 0;
+
+function pointerMidpoint() {
+  const pts = [...pointers.values()];
+  return [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
+}
+function pointerDistance() {
+  const pts = [...pointers.values()];
+  return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+}
+function clampDistance(value) {
+  return Math.max(Math.max(radius * 0.04, 0.02), Math.min(radius * 20, value));
+}
+function beginGesture() {
+  if (pointers.size >= 2) {
+    [lastMidX, lastMidY] = pointerMidpoint();
+    lastPinchDistance = Math.max(pointerDistance(), 1);
+  } else if (pointers.size === 1) {
+    const pt = pointers.values().next().value;
+    lastX = pt.x; lastY = pt.y;
+  }
+}
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   dragging = true;
-  panning = e.button === 2 || e.shiftKey;
-  lastX = e.clientX; lastY = e.clientY;
+  panning = e.pointerType !== 'touch' && (e.button === 2 || e.shiftKey);
+  beginGesture();
   canvas.classList.add('dragging');
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener('pointermove', e => {
-  if (!dragging) return;
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size >= 2) {
+    const [midX, midY] = pointerMidpoint();
+    const pinchDistance = Math.max(pointerDistance(), 1);
+    const dx = midX - lastMidX, dy = midY - lastMidY;
+    dist = clampDistance(dist * lastPinchDistance / pinchDistance);
+    panX -= dx * dist * 0.0016;
+    panY += dy * dist * 0.0016;
+    lastMidX = midX; lastMidY = midY; lastPinchDistance = pinchDistance;
+    requestDraw();
+    return;
+  }
   const dx = e.clientX - lastX, dy = e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
   if (panning) {
@@ -200,14 +370,37 @@ canvas.addEventListener('pointermove', e => {
     // Stop just short of the poles, where the up vector degenerates.
     pitch = Math.max(-1.5, Math.min(1.5, pitch + dy * 0.006));
   }
+  requestDraw();
 });
 for (const ev of ['pointerup', 'pointercancel']) {
-  canvas.addEventListener(ev, () => { dragging = false; canvas.classList.remove('dragging'); });
+  canvas.addEventListener(ev, e => {
+    pointers.delete(e.pointerId);
+    dragging = pointers.size > 0;
+    beginGesture();
+    canvas.classList.toggle('dragging', dragging);
+  });
 }
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  dist = Math.max(0.2, Math.min(radius * 20, dist * (e.deltaY < 0 ? 0.88 : 1.14)));
+  dist = clampDistance(dist * (e.deltaY < 0 ? 0.88 : 1.14));
+  requestDraw();
 }, { passive: false });
+canvas.addEventListener('dblclick', e => { e.preventDefault(); resetView(); });
+
+const controls = document.getElementById('controls');
+const panelToggle = document.getElementById('paneltoggle');
+const mobileLayout = window.matchMedia('(max-width: 720px), (pointer: coarse)');
+function setPanelOpen(open) {
+  controls.classList.toggle('collapsed', !open);
+  panelToggle.textContent = open ? 'Hide controls' : 'Controls';
+  panelToggle.setAttribute('aria-expanded', String(open));
+}
+function syncPanelLayout() {
+  setPanelOpen(!mobileLayout.matches);
+}
+panelToggle.onclick = () => setPanelOpen(controls.classList.contains('collapsed'));
+mobileLayout.addEventListener?.('change', syncPanelLayout);
+syncPanelLayout();
 
 const texBtn = document.getElementById('tex');
 texBtn.onclick = () => {
@@ -218,28 +411,127 @@ texBtn.onclick = () => {
 document.getElementById('size').oninput = e => {
   const mm = parseFloat(e.target.value);
   pointRadiusM = mm / 1000.0;
-  document.getElementById('sizeval').textContent = mm + ' mm';
+  document.getElementById('sizeval').textContent = units === 'relative'
+    ? pointRadiusM.toFixed(3) + ' rel.' : mm + ' mm';
 };
 function resetView() {
   yaw = 0.6; pitch = 0.25; dist = radius * 2.2; panX = 0; panY = 0;
+  requestDraw();
 }
 document.getElementById('reset').onclick = resetView;
+
+// --- cuts ----------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const lerp = (a, b, t) => a + (b - a) * t;
+//: Which world axis each slice option refers to; index 0 is "off".
+const AXIS_OF = [null, 0, 1, 2];
+
+function sliceRange() {
+  const axis = AXIS_OF[cuts.axis];
+  return axis === null ? [0, 1] : [bounds.min[axis], bounds.max[axis]];
+}
+
+function syncSlice() {
+  const [lo, hi] = sliceRange();
+  cuts.slicePos = lerp(lo, hi, $('slicepos').value / 1000);
+  cuts.sliceHalf = parseFloat($('slicethick').value) / 200;   // cm, half-width
+  $('sliceposval').textContent = cuts.axis
+    ? cuts.slicePos.toFixed(2) + (units === 'relative' ? ' rel.' : ' m') : '—';
+  $('slicethickval').textContent = units === 'relative'
+    ? (2 * cuts.sliceHalf).toFixed(2) + ' rel.'
+    : $('slicethick').value + ' cm';
+}
+function syncCeiling() {
+  const t = $('ceil').value / 1000;
+  cuts.ceil = t >= 1 ? Infinity : lerp(bounds.min[1], bounds.max[1], t);
+  $('ceilval').textContent = t >= 1 ? 'off'
+    : cuts.ceil.toFixed(2) + (units === 'relative' ? ' rel.' : ' m');
+}
+function syncFar() {
+  const pct = parseFloat($('far').value);
+  cuts.maxDist = pct >= 100 ? Infinity : radius * 2 * (pct / 100);
+  $('farval').textContent = pct >= 100 ? 'off'
+    : cuts.maxDist.toFixed(1) + (units === 'relative' ? ' rel.' : ' m');
+}
+function syncKeep() {
+  cuts.keep = parseFloat($('keep').value) / 100;
+  $('keepval').textContent = $('keep').value + '%';
+}
+
+$('axis').onchange = e => { cuts.axis = parseFloat(e.target.value); syncSlice(); };
+$('slicepos').oninput = syncSlice;
+$('slicethick').oninput = syncSlice;
+$('ceil').oninput = syncCeiling;
+$('far').oninput = syncFar;
+$('keep').oninput = syncKeep;
+
+function clearCuts() {
+  $('axis').value = '0'; cuts.axis = 0;
+  $('slicepos').value = 500;
+  $('slicethick').value = 20;
+  $('ceil').value = 1000;
+  $('far').value = 100;
+  $('keep').value = 100;
+  syncSlice(); syncCeiling(); syncFar(); syncKeep();
+  requestDraw();
+}
+$('clearcuts').onclick = clearCuts;
+
 window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === 't' || e.key === 'T') texBtn.click();
   if (e.key === 'r' || e.key === 'R') resetView();
+  if (e.key === 'c' || e.key === 'C') clearCuts();
+  // Step the slice along its axis — the fastest way to sweep a room for
+  // doubled surfaces is to hold an arrow key and watch the section move.
+  if (cuts.axis && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    const step = e.key === 'ArrowLeft' ? -5 : 5;
+    $('slicepos').value = Math.max(0, Math.min(1000, Number($('slicepos').value) + step));
+    syncSlice();
+    requestDraw();
+    e.preventDefault();
+  }
 });
 
 // --- load ----------------------------------------------------------------
 (async () => {
-  const meta = await (await fetch('cloud.json?t=' + Date.now())).json();
-  const buf = await (await fetch('cloud.bin?t=' + Date.now())).arrayBuffer();
+  // A base supplied in the URL lets one viewer inspect several builds without
+  // copying large binary files into this directory. The historical local
+  // cloud.json/cloud.bin pair remains the default.
+  const dataBase = new URLSearchParams(location.search).get('base') || 'cloud';
+  const meta = await (await fetch(dataBase + '.json?t=' + Date.now())).json();
+  const buf = await (await fetch(dataBase + '.bin?t=' + Date.now())).arrayBuffer();
   count = meta.count;
+  units = meta.units || 'm';
   const pos = new Float32Array(buf, 0, count * 3);
   const col = new Uint8Array(buf, count * 12, count * 3);
 
-  centre = meta.centre;
-  radius = Math.max(...meta.extent) * 0.5;
+  // Geometry keeps its exact bounds, including legitimate distant openings.
+  // Robust view bounds only decide the initial camera framing, so one far cell
+  // cannot make the room occupy a tiny patch in the middle of the screen.
+  centre = meta.view_centre || meta.centre;
+  radius = Math.max(...(meta.view_extent || meta.extent)) * 0.5;
   resetView();
+
+  // Cut sliders span the robust bounds, not the exact ones: a single point out
+  // through a doorway would otherwise push the whole useful range of every
+  // slider into a few pixels at one end.
+  bounds = { min: meta.view_min || meta.min, max: meta.view_max || meta.max };
+  clearCuts();
+
+  // Default the disc to the grid the points came from. A point smaller than
+  // its own cell leaves a gap between every neighbour, so a complete surface
+  // renders as a sieve and the fault looks like missing data. Slightly over
+  // half the cell size: discs on a grid must overlap to tile it, and the
+  // diagonal neighbour is the one that decides.
+  if (meta.voxel_m) {
+    const mm = Math.round(meta.voxel_m * 1000 * 0.75);
+    const slider = document.getElementById('size');
+    slider.max = Math.max(Number(slider.max), mm * 2);
+    slider.value = mm;
+    pointRadiusM = mm / 1000.0;
+    document.getElementById('sizeval').textContent = mm + ' mm';
+  }
 
   const pb = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, pb);
@@ -255,15 +547,24 @@ window.addEventListener('keydown', e => {
   gl.enableVertexAttribArray(aCol);
   gl.vertexAttribPointer(aCol, 3, gl.UNSIGNED_BYTE, true, 0, 0);
 
-  gl.uniform1f(uYMin, meta.min[1]);
-  gl.uniform1f(uYRange, meta.max[1] - meta.min[1]);
+  const shadeMin = meta.view_min || meta.min;
+  const shadeMax = meta.view_max || meta.max;
+  gl.uniform1f(uYMin, shadeMin[1]);
+  gl.uniform1f(uYRange, shadeMax[1] - shadeMin[1]);
 
   document.getElementById('meta').innerHTML =
     `${count.toLocaleString()} points · ${meta.keyframes} keyframes · ` +
     `<code>${meta.model}</code> · extent ` +
-    `<code>${meta.extent.map(v => v.toFixed(1)).join(' × ')} m</code>`;
-  frame();
+    `<code>${meta.extent.map(v => v.toFixed(1)).join(' × ')} ` +
+    `${units === 'relative' ? 'relative units' : 'm'}</code>`;
+  requestDraw();
 })();
+
+// Slider/select/button changes bubble here after their individual handlers
+// update the state, coalescing a burst of touch events into one frame.
+controls.addEventListener('input', requestDraw);
+controls.addEventListener('change', requestDraw);
+controls.addEventListener('click', requestDraw);
 </script>
 </body>
 </html>

@@ -241,4 +241,61 @@ class FrameConversionTest {
         }
         assertTrue("camelCase leaked into the wire format", !json.contains("sessionId"))
     }
+
+    @Test
+    fun `a tapped footprint serialises under the key the harness expects`() {
+        val bundle = SessionBundleWire(
+            sessionId = "s", roomId = "r",
+            device = DeviceInfo("Pixel 9", "Android 15", "arcore", "ARCore"),
+            gravity = FrameConversion.GRAVITY_DOWN,
+            floorOutline = FloorOutlineWire(
+                corners = listOf(
+                    listOf(0.0, 0.0, 0.0),
+                    listOf(4.0, 0.0, 0.0),
+                    listOf(4.0, 0.0, 3.0),
+                    listOf(0.0, 0.0, 3.0),
+                ),
+                cornerIds = listOf(1, 2, 3, 4),
+                closed = true,
+                referencePointAdjustments = listOf(
+                    ReferencePointAdjustmentWire(
+                        cornerId = 2,
+                        fromPoint = listOf(4.0, 0.0, 0.0),
+                        toPoint = listOf(4.25, 0.0, -0.1),
+                        delta = listOf(0.25, 0.0, -0.1),
+                        startedAtNs = 10,
+                        endedAtNs = 20,
+                    )
+                ),
+            ),
+        )
+        val json = Json { encodeDefaults = true }.encodeToString(bundle)
+        // `floor_outline`, not `floorOutline`: SessionBundle forbids unknown
+        // fields, so the wrong case fails the whole upload rather than dropping
+        // just the footprint.
+        assertTrue("missing floor_outline in $json", json.contains("\"floor_outline\""))
+        assertTrue(json.contains("\"corners\""))
+        assertTrue(json.contains("\"corner_ids\""))
+        assertTrue(json.contains("\"closed\""))
+        assertTrue(json.contains("\"reference_point_adjustments\""))
+        assertTrue(json.contains("\"corner_id\""))
+        assertTrue(json.contains("\"from\""))
+        assertTrue(json.contains("\"started_at_ns\""))
+        assertTrue("camelCase leaked", !json.contains("floorOutline"))
+    }
+
+    @Test
+    fun `a bundle with no footprint omits it rather than sending an empty one`() {
+        val bundle = SessionBundleWire(
+            sessionId = "s", roomId = "r",
+            device = DeviceInfo("Pixel 9", "Android 15", "arcore", "ARCore"),
+            gravity = FrameConversion.GRAVITY_DOWN,
+        )
+        val json = Json { encodeDefaults = true }.encodeToString(bundle)
+        // An empty corner list would read downstream as "the user traced
+        // nothing", which is true, but so does null — and null is the shape
+        // every bundle captured before this feature already has.
+        assertTrue("expected a null floor_outline, got $json",
+            json.contains("\"floor_outline\": null") || json.contains("\"floor_outline\":null"))
+    }
 }

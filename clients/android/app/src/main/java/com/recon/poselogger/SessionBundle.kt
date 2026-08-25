@@ -70,6 +70,22 @@ data class KeyframeWire(
     @SerialName("blur_score") val blurScore: Double,
     @SerialName("exposure_clip_ratio") val exposureClipRatio: Double,
     val depth: String? = null,
+    /**
+     * Device heading when this frame was taken, degrees clockwise from magnetic
+     * north, or null if the device has no rotation-vector sensor or had not yet
+     * reported one.
+     *
+     * Recorded per keyframe rather than once per session because the value of a
+     * compass here is *relative*: indoors the field is bent tens of degrees by
+     * steel and wiring, so no single reading is a true bearing, but two readings
+     * in the same room share most of that distortion and their difference is
+     * meaningful. A per-session heading would throw away exactly that.
+     *
+     * Nothing consumes this yet. It is recorded because it cannot be recovered
+     * afterwards — a capture without it is a capture that can never be used to
+     * test whether it helps.
+     */
+    @SerialName("heading_deg") val headingDeg: Double? = null,
 )
 
 @Serializable
@@ -85,6 +101,39 @@ data class ReferenceMeasurementWire(
     @SerialName("point_b") val pointB: List<Double>? = null,
     @SerialName("measured_value_m") val measuredValueM: Double,
     @SerialName("sigma_m") val sigmaM: Double,
+)
+
+/**
+ * The footprint the user tapped out corner by corner, in capture-frame metres.
+ *
+ * `closed` is not decoration: an open outline is a partial trace the user
+ * abandoned, and the harness must not treat it as a room boundary.
+ */
+@Serializable
+data class FloorOutlineWire(
+    val corners: List<List<Double>> = emptyList(),
+    /** Stable identities parallel to `corners`, used by adjustment records. */
+    @SerialName("corner_ids") val cornerIds: List<Long> = emptyList(),
+    val closed: Boolean = false,
+    /**
+     * User-driven moves of footprint corners made after recording began.
+     *
+     * The final `corners` remain the asserted room boundary.  This history is
+     * the correction signal: it says which stable reference point moved, from
+     * where to where, and during which part of the capture it happened.
+     */
+    @SerialName("reference_point_adjustments")
+    val referencePointAdjustments: List<ReferencePointAdjustmentWire> = emptyList(),
+)
+
+@Serializable
+data class ReferencePointAdjustmentWire(
+    @SerialName("corner_id") val cornerId: Long,
+    @SerialName("from") val fromPoint: List<Double>,
+    @SerialName("to") val toPoint: List<Double>,
+    val delta: List<Double>,
+    @SerialName("started_at_ns") val startedAtNs: Long,
+    @SerialName("ended_at_ns") val endedAtNs: Long,
 )
 
 @Serializable
@@ -133,6 +182,8 @@ data class SessionBundleWire(
     @SerialName("reference_measurements")
     val referenceMeasurements: List<ReferenceMeasurementWire> = emptyList(),
     val doorways: List<DoorwayWire> = emptyList(),
+    /** User-tapped room footprint; null when the user never traced one. */
+    @SerialName("floor_outline") val floorOutline: FloorOutlineWire? = null,
     /** Shots the user could not obtain; empty on a capture that got everything. */
     @SerialName("skipped_shots") val skippedShots: List<SkippedShotWire> = emptyList(),
     @SerialName("schema_version") val schemaVersion: Int = 1,

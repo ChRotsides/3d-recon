@@ -78,7 +78,15 @@ class BundleDir:
         p = self.root / kf.depth
         if not p.exists():
             return None
-        return np.asarray(Image.open(p), dtype=np.float32) * DEPTH_SCALE_M
+        image = Image.open(p)
+        # Mobile depth maps are deliberately stored at the sensor's native low
+        # resolution. They are aligned to the RGB frustum, so nearest-neighbour
+        # expansion is the correct way to put them on the keyframe pixel grid.
+        if image.size != (kf.intrinsics.width, kf.intrinsics.height):
+            image = image.resize(
+                (kf.intrinsics.width, kf.intrinsics.height), Image.Resampling.NEAREST
+            )
+        return np.asarray(image, dtype=np.float32) * DEPTH_SCALE_M
 
     def semantic(self, kf: Keyframe) -> np.ndarray | None:
         """Ground-truth semantic labels (synthetic bundles only), -1 == no return."""

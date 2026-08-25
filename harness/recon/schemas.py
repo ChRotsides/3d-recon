@@ -160,6 +160,12 @@ class Keyframe(BaseModel):
     exposure_clip_ratio: float = 0.0
     #: Optional sibling file holding float32 metric depth (synthetic / RGBD rigs).
     depth: str | None = None
+    #: Compass heading when the frame was taken, degrees clockwise from magnetic
+    #: north. Optional: older bundles predate it, and a device may have no
+    #: rotation-vector sensor. Indoors this is a poor absolute bearing — steel
+    #: and wiring bend the field by tens of degrees — but a serviceable relative
+    #: one, because readings minutes apart in one room share that distortion.
+    heading_deg: float | None = None
 
 
 class SparsePoint(BaseModel):
@@ -213,6 +219,90 @@ class Doorway(BaseModel):
     height_m: float = 0.0
 
 
+class ReferencePointAdjustment(BaseModel):
+    """One completed drag of a user-placed room reference point.
+
+    The final outline describes the room boundary.  This history describes a
+    human correction made partway through capture, allowing downstream pose or
+    geometry fitting to compensate the frames on either side of that change.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    corner_id: int = Field(ge=1)
+    from_: Vec3 = Field(alias="from")
+    to: Vec3
+    delta: Vec3
+    started_at_ns: int = Field(ge=0)
+    ended_at_ns: int = Field(ge=0)
+
+    @field_validator("ended_at_ns")
+    @classmethod
+    def _ends_after_start(cls, value: int, info) -> int:
+        if value < info.data.get("started_at_ns", 0):
+            raise ValueError("reference-point adjustment ends before it starts")
+        return value
+
+
+class FloorOutline(BaseModel):
+    """The room footprint the user tapped out, corner by corner, during capture.
+
+    Every other estimate of the room's shape in this system is inferred — from
+    fitted planes, from a fused cloud, from a depth model. This one is asserted
+    by the person standing in the room, which makes it the only footprint that
+    can *check* the others rather than agree with them by construction.
+
+    Corners are in the capture frame (Y-up). `closed` distinguishes a finished
+    loop from a trace the user abandoned partway; only a closed outline bounds
+    an area, so an open one must never be used as a room boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    corners: list[Vec3] = Field(default_factory=list)
+    #: Stable ids parallel to ``corners``. Empty is accepted for legacy bundles.
+    corner_ids: list[int] = Field(default_factory=list)
+    closed: bool = False
+    reference_point_adjustments: list[ReferencePointAdjustment] = Field(default_factory=list)
+
+    @field_validator("corners")
+    @classmethod
+    def _enough_corners(cls, v: list[Vec3]) -> list[Vec3]:
+        if v and len(v) < 3:
+            raise ValueError(f"a footprint needs 3 corners or none, got {len(v)}")
+        return v
+
+    @field_validator("corner_ids")
+    @classmethod
+    def _corner_ids_match_corners(cls, ids: list[int], info) -> list[int]:
+        corners = info.data.get("corners", [])
+        if ids and len(ids) != len(corners):
+            raise ValueError("corner_ids must be empty or parallel to corners")
+        if any(corner_id < 1 for corner_id in ids) or len(set(ids)) != len(ids):
+            raise ValueError("corner_ids must be unique positive integers")
+        return ids
+
+    @property
+    def area_m2(self) -> float:
+        """Shoelace on the horizontal projection; 0 while the loop is open."""
+        if not self.closed or len(self.corners) < 3:
+            return 0.0
+        p = np.asarray(self.corners, dtype=np.float64)[:, [0, 2]]
+        q = np.roll(p, -1, axis=0)
+        return float(abs(np.sum(p[:, 0] * q[:, 1] - q[:, 0] * p[:, 1])) / 2.0)
+
+    @property
+    def perimeter_m(self) -> float:
+        if len(self.corners) < 2:
+            return 0.0
+        p = np.asarray(self.corners, dtype=np.float64)[:, [0, 2]]
+        edges = np.diff(p, axis=0)
+        total = float(np.sum(np.linalg.norm(edges, axis=1)))
+        if self.closed:
+            total += float(np.linalg.norm(p[0] - p[-1]))
+        return total
+
+
 class ShotHeight(str, Enum):
     """Where in the room a scripted shot was aimed."""
 
@@ -264,6 +354,8 @@ class SessionBundle(BaseModel):
     sparse_points: list[SparsePoint] = Field(default_factory=list)
     reference_measurements: list[ReferenceMeasurement] = Field(default_factory=list)
     doorways: list[Doorway] = Field(default_factory=list)
+    #: Footprint the user tapped out during capture; None when they never did.
+    floor_outline: FloorOutline | None = None
     #: Shots the user could not obtain. Empty on a capture that got everything,
     #: and on any client that does not run a scripted capture.
     skipped_shots: list[SkippedShot] = Field(default_factory=list)

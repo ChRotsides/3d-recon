@@ -27,8 +27,8 @@ import kotlin.math.sqrt
  * is configured and the app degrades to nags and keyframe counting without it.
  */
 class DepthSampler(
-    /** Sample every Nth pixel in each axis. 3 over a 160x120 map is ~2000 points. */
-    private val stride: Int = 3,
+    /** Sample every Nth pixel in each axis. 6 over a 160x120 map is ~500 points. */
+    private val stride: Int = 6,
 ) {
 
     class Samples(

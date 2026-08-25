@@ -14,7 +14,7 @@ export GRADLE_USER_HOME=~/.gradle          # needs ~2 GB free
 echo "sdk.dir=$HOME/Android/Sdk" > local.properties
 
 ./gradlew :app:assembleDebug       # -> app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:testDebugUnitTest   # 6 JVM tests, no device needed
+./gradlew :app:testDebugUnitTest   # JVM tests, no device needed
 ./gradlew installDebug             # to a connected ARCore device
 ```
 
@@ -35,20 +35,66 @@ than only when someone plugs a phone in. It pins:
 ## Using a capture
 
 The app writes to `Android/data/com.recon.poselogger/files/captures/bundle_<uuid>/`.
-Pull it and check it before relying on it:
+Pull it, then build the panorama and the cloud from it:
 
 ```bash
-adb pull /sdcard/Android/data/com.recon.poselogger/files/captures/bundle_<uuid> .
-recon validate bundle_<uuid>
-recon reconstruct bundle_<uuid> --out runs/room --depth da3:base
+adb pull /sdcard/Android/data/com.recon.poselogger/files/captures/bundle_<uuid> \
+    data/captures/
+python scripts/capture/equirect.py  data/captures/bundle_<uuid> out/sessions/equirect.jpg 4096
+python scripts/capture/da3_cloud.py data/captures/bundle_<uuid> out/cloud.bin small 900000
 ```
 
-`recon validate` is the pre-flight: it catches a pure-rotation capture (no
-parallax, will not reconstruct), a missing VIO scale prior, intrinsics that were
-not rescaled after downscaling, and a tape measure entered in the wrong units —
-all before someone spends a day capturing fifteen rooms with a broken setup.
+`docs/capture-to-cloud.md` records what a good capture looks like in numbers —
+27 keyframes, a full circle of yaw, 1.23 m of baseline — and why a capture that
+pans inside a 1.3 m box produces a floor plan of the furniture. **For a
+panorama, turn on the spot**; for geometry, translate. The two goals pull in
+opposite directions and one capture cannot be optimal for both.
+
+## Capture guidance
+
+Phase 3 is on screen. All of it is decided by the shared Rust core and merely
+drawn here, per ADR-0001 — the Activity chooses how to render, never what is
+true:
+
+* **Coverage paint** (`CoverageRenderer`) — the core's coverage voxels over the
+  real surfaces, amber where a voxel has been seen but has not cleared `q_min`,
+  green where it has. It answers "which wall still needs work" in place, rather
+  than as a number to interpret.
+* **Station ring** (`StationRenderer`) — the §6.1 next-best-station on the floor,
+  with a pulse so it is findable, plus an on-screen arrow (`StationArrow`) when
+  it is behind the user.
+* **HUD** (`GuidanceHud`) — floor/wall/ceiling bars against the core's own
+  targets, the keyframe budget, and the core's nag wording verbatim.
+
+The bars read *quality of what you have seen*, not *share of the room*: the
+core measures against observed voxels because the room's extent is unknown
+mid-capture. The HUD says so out loud, because "90%" invites the other reading.
+
+The camera preview intentionally has no room-outline drawing interaction. Raw
+AR-space lines moved whenever tracking refined its map and disappeared during
+brief tracking pauses, turning capture into an editing task. Room boundaries
+are inferred from the reconstructed geometry; manual corrections belong in a
+stable post-capture top-down editor. The existing outline wire schema remains
+compatible with that future editor.
+
+### Where the geometry comes from
+
+`DepthSampler` back-projects **ARCore's depth map** into the world-space
+oriented samples the coverage grid consumes. This is not §3.6's on-device
+DA3-Small pass, which still needs a GPU to train and a device to run. It drives
+guidance, and accepted keyframes retain the aligned sensor map as 16-bit
+millimetre PNG evidence. The offline pipeline may still choose inferred depth,
+but validation can now prove whether device depth was actually present.
+
+Before production capture is enabled, the app must acquire several real depth
+frames over time. A device without sustained depth support can only enter the
+separately labelled RGB-only mode through a confirmation dialog; its bundle is
+written with `capture_mode: rgb_only`, and the HUD says coverage is unmeasurable
+rather than drawing zeros that look like a successful target sequence.
 
 ## Not done
 
-No guidance overlay, no next-best-station ring. That is Phase 3 and it belongs
-in the shared Rust core (`core/`), not in an Activity — see ADR-0001.
+Occlusion for the coverage paint. There is no depth buffer for the real world
+in this renderer, so coverage on a far wall shows through a near one. Left as
+is deliberately — seeing that the wall behind you is still amber is useful, and
+a half-right occlusion test reads as missing coverage, which is worse.

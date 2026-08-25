@@ -1,10 +1,13 @@
 __pycache__/
 *.py[cod]
-.venv/
+# No trailing slash: these are now symlinks into ~/ai/envs, not directories.
+.venv
+.venv-kepler
 venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.codebase-memory/
 .coverage
 htmlcov/
 
@@ -30,6 +33,7 @@ clients/ios/build/
 clients/ios/DerivedData/
 clients/android/build/
 clients/android/.gradle/
+clients/android/.kotlin/
 clients/android/app/build/
 *.xcuserstate
 local.properties
@@ -41,3 +45,7 @@ clients/android/build/
 clients/android/local.properties
 viewer/vendor/
 core/bindings/
+
+# Archived: everything outside the capture-to-cloud path (docs/capture-to-cloud.md)
+archive/
+.playwright-mcp/

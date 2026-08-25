@@ -206,6 +206,60 @@ impl CoverageGrid {
         v.normal = v.normal + normal.normalized();
     }
 
+    /// How much of what this frame sees is still short of the quality bar.
+    ///
+    /// Returns `(novel_fraction, contributing_samples)`. A sample contributes
+    /// only if it would actually change the grid — front-facing, in range, not
+    /// hopelessly blurred — which is the same test [`Self::observe`] applies, so
+    /// a frame is judged on the geometry it would really add rather than on
+    /// every pixel it happens to contain. The count comes back too because a
+    /// verdict from nine samples is not a verdict.
+    ///
+    /// Deliberately *not* the same thing as the station solver's expected gain:
+    /// that ranks places a user could walk to, over the whole grid. This asks a
+    /// narrower question about one frame that already exists, so it needs no
+    /// visibility approximation — the samples themselves are the evidence.
+    pub fn novel_fraction(
+        &self,
+        points: &[Vec3],
+        normals: &[Vec3],
+        camera: Vec3,
+        blur_score: f32,
+    ) -> (f32, usize) {
+        let w_blur = self.blur_weight(blur_score);
+        let mut contributing = 0usize;
+        let mut novel = 0usize;
+        for (p, n) in points.iter().zip(normals.iter()) {
+            let to_cam = camera - *p;
+            let d = to_cam.length();
+            if d < 1e-4 {
+                continue;
+            }
+            let cos_theta = n.normalized().dot(to_cam * (1.0 / d));
+            if cos_theta <= 0.0 {
+                continue;
+            }
+            if self.distance_weight(d) <= 0.0 {
+                continue;
+            }
+            if cos_theta * cos_theta * self.distance_weight(d) * w_blur <= 0.0 {
+                continue;
+            }
+            contributing += 1;
+            let short_of_the_bar = self
+                .voxels
+                .get(&self.key_of(*p))
+                .is_none_or(|v| v.quality < self.params.q_min);
+            if short_of_the_bar {
+                novel += 1;
+            }
+        }
+        if contributing == 0 {
+            return (0.0, 0);
+        }
+        (novel as f32 / contributing as f32, contributing)
+    }
+
     pub fn is_covered(&self, k: VoxelKey) -> bool {
         self.voxels.get(&k).is_some_and(|v| v.quality >= self.params.q_min)
     }

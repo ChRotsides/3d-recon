@@ -24,9 +24,14 @@ cargo run --bin uniffi-bindgen -- generate \
 
 cp -r bindings/kotlin/uniffi/recon_core \
       ../clients/android/app/src/main/java/uniffi/
-cp bindings/swift/recon_core.swift bindings/swift/recon_coreFFI.* \
-      ../clients/ios/PoseLogger/Generated/
 ```
+
+`cargo test` does **not** rebuild the cdylib. Generating bindings straight after
+it silently produces bindings without the new API — run `cargo build` first, as
+above.
+
+Swift bindings are still generated (`--language swift`), but the iOS client that
+consumed them is in `archive/clients/ios`.
 
 ## Native libraries
 
@@ -38,8 +43,8 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -o ../clients/android/app/src/main/jniLibs
 # iOS: cargo build --release --target aarch64-apple-ios, then lipo into an xcframework
 ```
 
-Not built here — the dev box has ~1 GB of disk free and each Rust target
-toolchain is a couple of hundred megabytes. See docs/execution-status.md.
+`cargo ndk` is what the Android app actually ships with; `scripts/dev-android.sh`
+drives the build-and-install loop.
 
 ## The FFI layer is separate on purpose
 
@@ -50,4 +55,5 @@ internals of a voxel grid.
 
 `nag_message()` lives here too: capture guidance is a product surface, and if
 each client wrote its own wording the two apps would say different things to the
-same user. `test_client_core_parity.py` asserts neither client has its own copy.
+same user. Android reads its thresholds from `defaultParams()` over UniFFI, so
+there is no copy left to drift.

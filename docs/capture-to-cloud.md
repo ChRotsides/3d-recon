@@ -1,5 +1,11 @@
 # Capture to point cloud, the path that worked
 
+> **Current best RGB-only result:** the later feature-stitch → wrapped panorama
+> → six-face virtual cubemap → Depth Anything workflow is recorded exactly in
+> [`image-only-panorama-cubemap-point-cloud.md`](image-only-panorama-cubemap-point-cloud.md).
+> The document below describes the earlier ARCore-assisted experiment and is
+> retained as historical evidence.
+
 Written 2026-08-09, from the first run that produced a usable 360 panorama and a
 recognisable 3D point cloud of a real room on this hardware. It records what was
 done, the numbers it produced, and — more usefully — the two places where the
@@ -205,6 +211,174 @@ Three conclusions:
 None of these were applied to the cloud described above. It is the unfiltered
 result.
 
+---
+
+## 6a. Fix 1 applied, and what it revealed — 2026-08-10
+
+Fix 1 is implemented in `recon/depth/anchor.py` and on by default
+(`DA3Config.anchor_to_reference_depth`). It does what §6 predicted, and in doing
+so it disproves §6's headline claim.
+
+### It works, on every metric it was aimed at
+
+Per frame, `d_metric ≈ a·d_pred + b` fitted robustly over every measured pixel
+— Theil–Sen start, then Huber-reweighted least squares. Both variants, same 27
+frames:
+
+| | small before | small after | large before | large after |
+|---|---|---|---|---|
+| frame-to-frame scale spread | 2.36× | **1.11×** | 2.58× | **1.08×** |
+| within-frame spread | 0.541 | **0.228** | 0.445 | **0.201** |
+| median absolute error | 0.358 m | **0.184 m** | 0.579 m | **0.156 m** |
+| residual after one global scale | 7.7% | **0.8%** | 15.1% | **0.9%** |
+
+Held-out check, fitting on alternating 8×8 tiles and scoring on all pixels:
+identical to four significant figures. Two parameters cannot memorise 300k
+constraints, and now that is shown rather than argued.
+
+Disparity space scores slightly better than depth space (large: 0.183 vs 0.201
+spread, 0.135 vs 0.156 m). It is **not** the default, because `1/(a/d + b)`
+silently caps depth at `1/b` — about 7.4 m on this capture. That flatters the
+error on a small room and would quietly truncate a corridor.
+
+### Two frames in six wanted to lie
+
+Six of 27 frames fitted `a` between 0.012 and 0.16 with `b` near 2.7 m — the
+line collapsing to *discard the prediction and place the whole frame at one
+constant depth*. Every one **lowered** its residual by doing so (kf_0007:
+0.79 m → 0.15 m). Scored against the sensor it is an improvement; as geometry it
+is a flat wall where a room was, and a residual test cannot tell the difference.
+
+Hence `MIN_CORRELATION`: a frame is corrected only if the prediction and the
+measurement agree about its *shape* first, independent of scale. That recovers
+23 of 27 and refuses the rest, which keep their sparse anchor.
+
+### The extent was never a depth problem
+
+The cloud still comes out ~10.5 × 6.9 × 11.7 m. The control settles why —
+build the cloud from **ARCore's measured depth alone, no model at all**:
+
+```
+ARCore-only cloud       8,294,400 pts   extent 10.46 × 6.02 × 11.58 m
+DA3-large + anchor      8,294,400 pts   extent 10.51 × 6.91 × 11.72 m
+```
+
+**The measurement §6 used as ground truth produces the same extent as the model
+it was condemning.** So §6's "the extent is not this room, therefore DA3 is
+wrong" does not follow, and the ranked fix list was aimed at the wrong target.
+
+Where the extent actually comes from, over all 8.29M measured pixels:
+
+```
+p50 2.72 m   p90 4.09 m   p99 5.92 m
+beyond 4 m: 11.0%    beyond 6 m: 0.9%    beyond 8 m: 0.01%
+```
+
+The room is a normal room — 2.7 m typical, 99% of it inside 6 m. The extent is
+set by the 0.9% beyond 6 m, and those are not scattered noise: bearing them from
+the capture centre puts **every one of them in a single 90° arc**, 48k of 73k
+inside one 30° sector, and none at all across the other 270°. That is a doorway
+or an opening, seen through, and correctly measured.
+
+So the honest reading is that **extent is a bad summary statistic for a room
+with an opening in it**, and it is what made the cloud look broken. What remains
+genuinely worth doing from the §6 list is 3 (flying pixels) and 4 (voxel
+downsample); 2 has nothing left to reject, since ARCore returns depth for 100%
+of pixels in this capture, not the sparse subset §6 assumed.
+
+## 6b. The holes were self-inflicted — 2026-08-10
+
+The cloud looked full of holes. It was, and the builder was making them.
+
+`da3_cloud.py` kept a uniform random `max_points / frames` pixels per frame —
+33,333 of 307,200, **one in nine** — and a random sample of a surface leaves
+gaps at every scale. Measured against the cells the full 8.2M points occupy:
+
+```
+890,991 random points  ->    576,156 distinct 2 cm cells   39% of the surface
+                       ->    798,200 distinct 1 cm cells   19% of the surface
+```
+
+Four in five surface cells were empty because the points were discarded, not
+because nothing saw them. The replacement (`recon/cloud.py`) keeps **every**
+pixel, then reduces by voxel grid — one point per occupied cell, at the mean
+position and colour of its members, so it denoises as well as thins:
+
+```
+8,235,753 points from 27 frames (58,647 flying pixels dropped at depth edges)
+8,153,395 after trimming the far 1%
+1,455,617 after a 2.0 cm voxel grid          21.8 MB
+```
+
+Surface coverage on a fixed 2 cm grid goes **576,156 -> 1,211,508 cells**
+against a ceiling of 1,482,775. (The residual gap is a half-cell registration
+artefact — the two clouds are gridded from different origins — not missing
+surface.)
+
+Note the trade the grid makes. At 3 cm it is *724,311 points and 10.9 MB* —
+a complete surface in a **smaller** file than the 13.4 MB speckled one it
+replaces. Density is now a dial (`choose_voxel_size` picks the finest grid that
+fits the point budget) rather than a consequence of how many times a random
+draw happened to land on a given patch of wall.
+
+**Half of the holes were in the renderer.** `cloud.html` defaulted to a 10 mm
+disc. Points on a 20 mm grid drawn at 10 mm cannot tile it — a complete surface
+renders as a sieve, and the fault reads as missing data. The viewer now takes
+`voxel_m` from the manifest and defaults the disc to 0.75x the cell, because
+discs on a grid have to overlap to cover it and the diagonal neighbour is what
+decides.
+
+**What is still a real hole**, and what no filter fixes: surfaces no camera saw.
+The pitch range was −40°…+25°, so there is no ceiling directly overhead and no
+floor directly underfoot; and anything occluded from all 27 viewpoints — behind
+furniture, inside the doorway — was never measured. Those close by capturing
+them, or by meshing, not by processing.
+
+## 6c. Cleanup now uses evidence, not distance — 2026-08-10
+
+The next cleanup pass is frame-aware. Every point carries its source keyframe
+into voxelisation; pixels from one frame are averaged first, then every frame
+gets one vote in the final Huber-weighted centre. This prevents a close or dense
+view from pulling a surface away from several sparser views.
+
+A voxel is removed only when both are true:
+
+- fewer than two distinct frames support it;
+- fewer than three cells in its 26-neighbourhood are occupied.
+
+The second condition matters. Requiring two frames everywhere would erase a
+real wall or doorway seen from only one angle. Local coherence preserves those
+surfaces while isolated speckles and thin tails disappear. A final conservative
+dispersion check removes voxels whose per-frame samples still span more than
+0.75 of the voxel size. The manifest records every kept and removed count under
+`cleanup`, so the filter cannot silently improve its appearance by deleting an
+unknown fraction of the capture.
+
+The old radial far-1% deletion is gone. Section 6a established that its target
+was predominantly a real opening, not model noise. `cloud.bin` and the exact
+`min`/`max` bounds now retain it; separate coordinate-wise 1st–99th percentile
+`view_*` bounds only control the viewer's initial camera and height shading.
+
+Validated on the cached 27-frame DA3-Large result at a 2 cm grid:
+
+```
+8,235,753 input points
+1,525,996 occupied voxels
+1,505,510 kept
+   20,485 isolated low-support voxels removed
+        1 high-dispersion voxel removed
+1,465,571 coherent low-support voxels explicitly preserved
+```
+
+That is intentionally conservative: cleanup removed 1.34% of occupied cells,
+not a convenient fixed percentage. Retaining the far geometry increased the
+exact depth-axis extent from the previously clipped ~11.7 m to 14.09 m, while
+the robust viewer extent is 12.44 m.
+
+The builder also accepts `--depth-cache DEPTH.npz`, so thresholds and voxel
+sizes can be compared from one fixed model result instead of paying for another
+inference run or accidentally comparing two different predictions.
+
 ## 7. Reproducing it
 
 Everything below lives in the repo: builders in `scripts/capture/`, viewer
@@ -240,8 +414,10 @@ Two more, for diagnosis rather than output:
 # writes the manifest.json that panorama.html reads
 python scripts/capture/stitch_sessions.py <dir-of-bundles> out/sessions
 
-# DA3 vs ARCore depth, per frame — the measurement in §6
-python scripts/capture/depth_diag.py data/captures/bundle_<uuid>
+# DA3 vs ARCore depth, per frame, before and after the affine anchor — §6 and §6a.
+# Second argument is the variant; the model runs once and both corrections are
+# fitted from that one prediction.
+python scripts/capture/depth_diag.py data/captures/bundle_<uuid> [small|large]
 ```
 
 `panorama.html` expects `sessions/manifest.json` beside it; `cloud.html` expects

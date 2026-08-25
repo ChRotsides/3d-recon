@@ -1,79 +1,81 @@
-# Room-to-House 3D Scanner
+# Room capture → 360 panorama + point cloud
 
-Phone capture → cloud reconstruction → photorealistic walkthrough + dimensioned
-floor plan. No LiDAR required.
+Phone capture with no LiDAR, turned into a 360 equirectangular panorama and a
+metric 3D point cloud of the room. **This tree contains only the path that has
+been made to work end to end on real hardware**, documented with its numbers and
+its failure modes in [`docs/capture-to-cloud.md`](docs/capture-to-cloud.md).
 
-The approved architecture is [`room-scanner-implementation-plan.md`](room-scanner-implementation-plan.md).
+Everything else — the TSDF/floorplan/planes/masking/splat reconstruction
+pipeline, the FastAPI service, the Babylon walkthrough viewer, the iOS client —
+is in `archive/` (git-ignored, nothing deleted) to be built back on top of this
+once it earns its place. The original architecture it came from is
+[`room-scanner-implementation-plan.md`](room-scanner-implementation-plan.md).
 
-- **[`docs/status-summary.md`](docs/status-summary.md)** — one page: what is done,
-  what is blocked, and on what.
-- [`docs/execution-status.md`](docs/execution-status.md) — deviations from the
-  plan and the reasoning behind each.
-- [`docs/licensing-audit.md`](docs/licensing-audit.md) — verified licences; three
-  findings change the plan.
+## The path
 
-**Measured against the plan's §1.3 targets:** wall-length error 0.06–0.15%
-(target 1.5%), floor area 0.05–0.16% (target 3%), whole-house drift 12.6 cm over
-six rooms (target 15 cm). 188 tests green.
+```
+Android app  →  adb pull  →  scripts/capture/*.py  →  viewer/*.html
+(core/ Rust)     bundle       equirect + DA3 cloud     panorama + cloud
+```
+
+```bash
+# 1. Capture: stand still, turn, press "Take picture" at each target.
+adb pull /sdcard/Android/data/com.recon.poselogger/files/captures/bundle_<uuid> \
+    data/captures/
+
+source ~/ai/env.sh kepler          # GPU env + shared model store
+
+# 2. 360 panorama, projected by pose (not by feature matching — see the doc)
+python scripts/capture/equirect.py \
+    data/captures/bundle_<uuid> out/sessions/equirect.jpg 4096
+
+# 3. Point cloud, DA3-Small
+python scripts/capture/da3_cloud.py \
+    data/captures/bundle_<uuid> out/cloud.bin small 900000
+
+# 4. Serve the viewers next to the artefacts they read
+cp viewer/panorama.html out/index.html
+cp viewer/cloud.html    out/cloud.html
+cd out && python -m http.server 8777 --bind 0.0.0.0
+```
+
+The cloud builder cleans by default: it removes flying depth-edge pixels, gives
+each frame one vote inside a voxel, and rejects a cell only when it lacks both
+multi-frame support and occupied neighbours. It does **not** delete a global
+distance percentile; exact geometry is retained while robust percentile bounds
+frame the initial viewer camera. Optional arguments after the point budget are
+`anchor_space`, `voxel_m`, `min_frame_support`, `min_neighbours`, and
+`max_spread_voxels`. Add `--depth-cache DEPTH.npz` to rebuild or tune the cloud
+without rerunning DA3.
 
 ## Layout
 
 ```
-harness/recon/       Phase-0 offline validation harness (Python)
-  schemas.py           SessionBundle / HouseGraph / RoomLayout  (plan §5)
-  geom.py              meshes, triangulation, ray casting
-  synth.py             synthetic rooms with exact ground truth
-  depth/               DA3, MapAnything, ground-truth adapters   (plan §3.1-3.2)
-  masking/             SAM 3, ground-truth, null maskers         (plan §3.5)
-  fusion/              TSDF volume                               (plan §6.4)
-  metric/              scale solver                              (plan §6.2)
-  layout/              planes, Atlanta regularization, floor plan(plan §6.4)
-  splat/               PGSR / 2DGS trainers on gsplat            (plan §3.3-3.4)
-  eval/                metrics + benchmark grid                  (plan §8)
-  stitch/              room alignment, house pose graph          (plan §6.3)
-core/                Shared Rust guidance core + UniFFI          (plan §3.8, §6.1)
-server/              FastAPI reconstruction service              (plan §2, Phase 2)
-viewer/              Babylon.js walkthrough                      (plan §3.8)
-clients/ios          Swift + ARKit pose logger                   (plan task 3)
-clients/android      Kotlin + ARCore pose logger                 (plan task 3)
-docs/                Status, ADRs, licensing audit               (plan §10)
+clients/android/     Kotlin + ARCore capture app — manual shutter, guidance HUD
+core/                Shared Rust capture core + UniFFI bindings the app calls
+harness/recon/       The Python the capture path needs, and nothing more
+  schemas.py           SessionBundle wire types
+  io/bundle.py         reads a pulled bundle
+  depth/da3.py         Depth Anything 3 adapter
+  torch_compat.py      Kepler (sm_35) torch shims
+scripts/capture/     equirect.py, da3_cloud.py + two diagnostics
+viewer/              panorama.html, cloud.html — dependency-free single files
+docs/                capture-to-cloud.md — what worked, measured
+archive/             everything outside that path (git-ignored)
 ```
 
-## Quick start
+## Tests
 
 ```bash
-uv venv --python 3.12 .venv && . .venv/bin/activate
-uv pip install -e '.[geometry,dev]'
-
-# Render five synthetic rooms with exact ground truth
-recon synth data/scenes --preset all --vio-scale-error 1.025
-
-# Reconstruct one and compare against truth
-recon reconstruct data/scenes/l_shaped --out runs/l_shaped
-
-# Run the Phase-0 benchmark grid
-recon bench data/scenes --out runs/bench
+pytest harness/tests -q      # bundle/schema + Kepler-torch compatibility
+cd core && cargo test        # the shared capture core
+cd clients/android && ./gradlew :app:testDebugUnitTest
 ```
 
-`recon bench` writes `report.md` (the plan §4 table), `report.json` (the
-regression baseline) and evaluates the Phase-0 exit criterion.
+## Known-wrong, measured
 
-## Rust guidance core
-
-```bash
-cd core && cargo test
-```
-
-## Status
-
-Everything the plan calls for that can be built and verified **without a GPU, a
-phone or a Mac is built and verified**. What remains is hardware, not unwritten
-code:
-
-| Blocked on | What |
-|---|---|
-| a GPU | DA3 / MapAnything / SAM 3 / PGSR actually running |
-| a device | on-device DA3-Small, capture-time metrics |
-| a Mac | the iOS Xcode project |
-
-See [`docs/status-summary.md`](docs/status-summary.md).
+The cloud comes out 11.0 × 5.4 × 14.4 m, which is not this room. Global scale is
+already right to 2.5%; the error is per-frame scale (frames disagree by 2.36×)
+and depth *shape* within each frame. `docs/capture-to-cloud.md` §6 has the
+measurement and the ranked fix list — a robust per-frame affine fit against the
+ARCore depth every frame already carries is the first and cheapest win.

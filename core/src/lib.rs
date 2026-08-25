@@ -16,6 +16,7 @@ uniffi::setup_scaffolding!();
 pub mod capture;
 pub mod coverage;
 pub mod ffi;
+pub mod floorplan;
 pub mod math;
 pub mod quality;
 pub mod script;
@@ -23,6 +24,10 @@ pub mod session;
 pub mod station;
 
 pub use coverage::{CoverageGrid, CoverageParams, Voxel, VoxelKey};
+pub use floorplan::{
+    floor_hit, FloorHit, FloorPlan, FloorPlanParams, Footprint, Mark, MarkKind, MarkOutcome,
+    MarkQuality, MarkRejection, Point2,
+};
 pub use math::{look_rotation, yaw_rotation, Pose, Vec3};
 pub use quality::{
     assess_completion, CompletionStatus, CompletionThresholds, FrameStats, KeyframeDecision,
@@ -702,13 +707,13 @@ mod tests {
         f.pose.r = math::look_rotation(2.5, 0.0);
         let u = s.observe_frame(&f, &pts, &nrm);
         assert_eq!(u.decision, KeyframeDecision::RejectOffTarget);
-        assert_eq!(u.shot_progress, (0, 24), "eight overlapping directions x three heights");
+        assert_eq!(u.shot_progress, (0, 36), "twelve overlapping directions x three heights");
 
         // Shoot the pass by aiming where each shot asks. A shot is now
         // satisfied by holding roughly on target for a moment rather than by
         // one frame arriving perfect, so each is fed a short burst — which is
         // what pointing a phone at something actually produces.
-        for _ in 0..24 {
+        for _ in 0..36 {
             let want = u_direction(&s);
             let before = s.script().unwrap().progress().0;
             t += 0.05;

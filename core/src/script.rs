@@ -109,9 +109,9 @@ pub struct ScriptParams {
     /// scripted capture reconstructed as disconnected patches for exactly that
     /// reason — one patch per shot, gaps in between.
     ///
-    /// Eight gives 45 degree spacing and ~40% overlap, which is the sort of
-    /// figure photogrammetry expects: neighbouring views must share enough
-    /// surface to be fused, not merely abut.
+    /// Twelve gives 30 degree spacing and about 60% horizontal overlap. The
+    /// generous overlap is intentional: depth alignment and feature matching
+    /// both need shared surfaces, not merely touching fields of view.
     pub centre_yaws: usize,
     /// Yaw directions asked for at each station. Fewer than the centre pass —
     /// the station is there for baseline — but still overlapping.
@@ -129,8 +129,8 @@ impl Default for ScriptParams {
             // Too tight and the user fights the reticle instead of capturing.
             aim_tolerance_rad: 0.30, // ~17 deg
             steady_rad_per_s: 0.35,
-            centre_yaws: 8,
-            station_yaws: 6,
+            centre_yaws: 12,
+            station_yaws: 10,
             min_baseline_m: 0.8,
         }
     }
@@ -177,9 +177,15 @@ impl CaptureScript {
         let mut shots = Vec::new();
         for i in 0..params.centre_yaws {
             let yaw = (i as f32) * std::f32::consts::TAU / (params.centre_yaws as f32);
-            // Bottom, middle, top of the *same* direction consecutively: the
-            // user tilts in place rather than turning a full circle three times.
-            for height in [ShotHeight::Bottom, ShotHeight::Middle, ShotHeight::Top] {
+            // Snake vertically. Ending one heading at the same height where
+            // the next begins avoids the old ceiling-to-floor diagonal jump,
+            // which was about 78 degrees and destroyed frame overlap.
+            let heights = if i % 2 == 0 {
+                [ShotHeight::Bottom, ShotHeight::Middle, ShotHeight::Top]
+            } else {
+                [ShotHeight::Top, ShotHeight::Middle, ShotHeight::Bottom]
+            };
+            for height in heights {
                 shots.push(Shot {
                     phase: ShotPhase::Centre,
                     yaw_rad: yaw,
@@ -207,7 +213,12 @@ impl CaptureScript {
         let offset = std::f32::consts::TAU / (2.0 * self.params.centre_yaws.max(1) as f32);
         for i in 0..n {
             let yaw = step * (i as f32) + offset;
-            for height in [ShotHeight::Bottom, ShotHeight::Middle] {
+            let heights = if i % 2 == 0 {
+                [ShotHeight::Bottom, ShotHeight::Middle]
+            } else {
+                [ShotHeight::Middle, ShotHeight::Bottom]
+            };
+            for height in heights {
                 shots_push(&mut self.shots, ShotPhase::Station, yaw, height);
             }
         }
@@ -355,7 +366,7 @@ mod tests {
         let s = script();
         let (done, total) = s.progress();
         assert_eq!(done, 0);
-        assert_eq!(total, 24, "8 overlapping directions x bottom/middle/top");
+        assert_eq!(total, 36, "12 overlapping directions x bottom/middle/top");
         assert!(s.shots.iter().all(|x| x.phase == ShotPhase::Centre));
     }
 
@@ -367,7 +378,6 @@ mod tests {
     fn neighbouring_shots_overlap_rather_than_merely_abut() {
         // The first scripted capture used 90 degree spacing against a 74.6
         // degree lens and reconstructed as disconnected patches — one per shot.
-        let s = script();
         let spacing = 360.0 / (ScriptParams::default().centre_yaws as f32);
         assert!(
             spacing < CAMERA_FOV_DEG * 0.75,
@@ -376,14 +386,37 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_targets_never_make_a_large_diagonal_jump() {
+        let mut s = script();
+        s.add_station();
+        for phase in [ShotPhase::Centre, ShotPhase::Station] {
+            let phase_shots: Vec<_> = s.shots.iter().filter(|shot| shot.phase == phase).collect();
+            for pair in phase_shots.windows(2) {
+                let a = s.direction_of(pair[0]);
+                let b = s.direction_of(pair[1]);
+                let separation_deg = a.dot(b).clamp(-1.0, 1.0).acos().to_degrees();
+                assert!(
+                    separation_deg <= 37.0,
+                    "{phase:?} targets are {separation_deg:.1} degrees apart"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn heights_are_grouped_so_the_user_tilts_rather_than_circles() {
         // Three full turns to collect bottom, then middle, then top would be a
         // miserable way to shoot a room. Consecutive shots share a direction.
         let s = script();
-        for chunk in s.shots.chunks(3) {
+        for (i, chunk) in s.shots.chunks(3).enumerate() {
             assert!(chunk.iter().all(|x| x.yaw_rad == chunk[0].yaw_rad));
-            assert_eq!(chunk[0].height, ShotHeight::Bottom);
-            assert_eq!(chunk[2].height, ShotHeight::Top);
+            if i % 2 == 0 {
+                assert_eq!(chunk[0].height, ShotHeight::Bottom);
+                assert_eq!(chunk[2].height, ShotHeight::Top);
+            } else {
+                assert_eq!(chunk[0].height, ShotHeight::Top);
+                assert_eq!(chunk[2].height, ShotHeight::Bottom);
+            }
         }
     }
 
@@ -419,7 +452,7 @@ mod tests {
     #[test]
     fn the_whole_centre_pass_can_be_shot() {
         let mut s = script();
-        for _ in 0..24 {
+        for _ in 0..36 {
             let want = s.direction_of(s.current().expect("a shot should remain"));
             assert_eq!(s.evaluate(&aimed_at(&s, want, 0.05)), ShotOutcome::Take);
             s.commit(Vec3::ZERO);
@@ -435,7 +468,7 @@ mod tests {
         let mut s = script();
         s.add_station();
         let (_, total) = s.progress();
-        assert_eq!(total, 24 + 12);
+        assert_eq!(total, 36 + 20);
         let station: Vec<_> = s.shots.iter().filter(|x| x.phase == ShotPhase::Station).collect();
         assert!(station.iter().all(|x| x.height != ShotHeight::Top), "top is the centre pass's job");
         for c in s.shots.iter().filter(|x| x.phase == ShotPhase::Centre) {
@@ -452,7 +485,7 @@ mod tests {
         // single-viewpoint bundle the harness refuses, and would be told the
         // capture was complete.
         let mut s = script();
-        for _ in 0..24 {
+        for _ in 0..36 {
             let want = s.direction_of(s.current().unwrap());
             assert_eq!(s.evaluate(&aimed_at(&s, want, 0.05)), ShotOutcome::Take);
             s.commit(Vec3::ZERO);
@@ -494,7 +527,7 @@ mod tests {
         s.skip_current();
         assert_eq!(s.progress().0, 0, "skipping is not capturing");
         assert_eq!(s.skipped(), 1);
-        assert_eq!(s.progress().1, 24, "the shot stays in the denominator");
+        assert_eq!(s.progress().1, 36, "the shot stays in the denominator");
     }
 
     #[test]
@@ -502,7 +535,7 @@ mod tests {
         // A room with a genuinely unreachable corner must be completable, or
         // the user abandons the whole capture rather than the one direction.
         let mut s = script();
-        for _ in 0..23 {
+        for _ in 0..35 {
             let want = s.direction_of(s.current().unwrap());
             s.evaluate(&aimed_at(&s, want, 0.05));
             s.commit(Vec3::ZERO);
@@ -510,7 +543,7 @@ mod tests {
         assert!(!s.finished());
         s.skip_current();
         assert!(s.finished(), "a skipped shot is resolved, not still owed");
-        assert_eq!(s.progress(), (23, 24));
+        assert_eq!(s.progress(), (35, 36));
         assert_eq!(s.skipped(), 1);
     }
 
@@ -531,7 +564,7 @@ mod tests {
         // The button exists while the script is running; the script can finish
         // between the user deciding to press it and the press arriving.
         let mut s = script();
-        for _ in 0..24 {
+        for _ in 0..36 {
             s.commit(Vec3::ZERO);
         }
         assert!(s.finished());

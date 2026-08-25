@@ -9,7 +9,7 @@ docs/execution-status.md) and then run unchanged on an L40S.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -23,7 +23,9 @@ class DepthResult:
 
     #: keyframe id -> (H, W) float32 metres, 0 == no return.
     depth: dict[str, np.ndarray]
-    #: keyframe id -> (H, W) float32 in [0, 1] confidence, if the model reports it.
+    #: keyframe id -> (H, W) float32 confidence, if the model reports it.
+    #: Higher must mean more reliable, but scores need not be calibrated or in
+    #: [0, 1]; fusion robustly normalises each frame before using them.
     confidence: dict[str, np.ndarray] = field(default_factory=dict)
     #: Independent metric-scale estimate (MapAnything's scale token, PLAN.md §3.2).
     #: Multiplies the reconstruction to reach metric. None if the model has no opinion.
@@ -32,6 +34,8 @@ class DepthResult:
     model_name: str = "unknown"
     runtime_s: float = 0.0
     peak_vram_gb: float = 0.0
+    #: Backend-specific, JSON-serialisable evidence such as sparse-anchor support.
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def stack(self, keyframes: list[Keyframe]) -> np.ndarray:
         return np.stack([self.depth[k.id] for k in keyframes])

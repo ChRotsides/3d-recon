@@ -13,6 +13,9 @@ import com.google.ar.core.exceptions.NotYetAvailableException
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.acos
 import kotlin.math.max
 import kotlin.math.min
@@ -160,7 +163,20 @@ class CaptureRecorder(
      */
     fun setHeading(degrees: Float) {
         guidance?.setHeading(degrees)
+        latestHeadingDeg = degrees.toDouble()
     }
+
+    /**
+     * Most recent compass reading, stamped onto the next keyframe written.
+     *
+     * The sensor and the camera run on different clocks, so this is the same
+     * "latest wins" arrangement the core already uses for guidance rather than
+     * an interpolation to the frame's exact timestamp — a hand-held turn moves
+     * a degree or two in that interval, which is far below the tens of degrees
+     * of indoor magnetic distortion.
+     */
+    @Volatile
+    private var latestHeadingDeg: Double? = null
 
     /** Where to go to get tracking back, or null before the first keyframe. */
     fun recovery(): uniffi.recon_core.FfiRecovery? = guidance?.recovery()
@@ -177,12 +193,15 @@ class CaptureRecorder(
      * refuse.
      */
     fun takePicture() {
+        if (held == null || encodingCandidate.get()) return
         guidance?.captureNow()
         writeHeldKeyframe()
     }
 
     /** Whether a frame is ready for the shutter, for the button's state. */
-    fun readyToShoot(): Boolean = guidance?.hasCandidate() ?: false
+    fun readyToShoot(): Boolean = held != null &&
+        !encodingCandidate.get() &&
+        (guidance?.hasCandidate() ?: false)
 
     /**
      * The best frame of the current viewpoint, encoded and waiting.
@@ -207,9 +226,52 @@ class CaptureRecorder(
         val sparse: List<List<Double>>,
     )
 
-    private var held: HeldFrame? = null
+    @Volatile private var held: HeldFrame? = null
+    private val heldLock = Any()
+    private val candidateEncoder = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "capture-candidate-encoder").apply { priority = Thread.NORM_PRIORITY - 1 }
+    }
+    private val encodingCandidate = AtomicBoolean(false)
+    @Volatile private var candidateEpoch = 0
+
+    /** Previous accepted RGB-D frame, reprojected for capture-time alignment. */
+    @Volatile var alignmentGhost: AlignmentGhost? = null
+        private set
+
+    /** Current depth agreement with [alignmentGhost], refreshed with frame scoring. */
+    @Volatile var alignmentStatus: AlignmentStatus? = null
+        private set
+
+    /**
+     * The footprint the user tapped, published by the activity as it changes.
+     *
+     * Written from the GL thread and read once on stop, so it is volatile and
+     * immutable-on-write rather than a mutable structure shared across threads.
+     */
+    @Volatile var floorOutline: FloorOutlineWire? = null
+
+    /**
+     * Immutable drag records published by the GL thread.  Keeping the full
+     * before/after vector lets offline reconstruction compensate frames before
+     * and after a moved room-reference marker instead of treating its final
+     * location as if it had been true for the entire capture.
+     */
+    @Volatile var referencePointAdjustments: List<ReferencePointAdjustmentWire> = emptyList()
+
+    fun recordReferencePointAdjustment(adjustment: ReferencePointAdjustmentWire) {
+        // A drag ends at most once per user gesture, so copy-on-write avoids a
+        // mutable collection crossing the GL and stop paths for negligible cost.
+        referencePointAdjustments = referencePointAdjustments + adjustment
+    }
+
+    /** Start a replacement set of user reference points. */
+    fun clearReferencePointAdjustments() {
+        referencePointAdjustments = emptyList()
+    }
 
     private var lastOfferAtMs: Long = 0
+    /** JPEG encoding is the single most expensive candidate operation. */
+    private var lastHeldImageAtMs: Long = 0
     private var lastPose: FloatArray? = null
     private var lastKeyframeTimeNs: Long = 0
     /**
@@ -225,7 +287,8 @@ class CaptureRecorder(
     private var prevFramePose: FloatArray? = null
     private var prevFrameTimeNs: Long = 0
     private lateinit var bundleDir: File
-    private var recording = false
+    @Volatile private var recording = false
+    @Volatile private var stopping = false
 
     /**
      * How tracking was last lost, or null while tracking.
@@ -256,6 +319,13 @@ class CaptureRecorder(
      */
     @Volatile var lastDepthSamples: Int = 0
         private set
+
+    /** Texture signal shared from MainActivity's already-acquired point cloud. */
+    @Volatile private var sparsePointCount: UInt = 0u
+
+    fun setSparsePointCount(count: Int) {
+        sparsePointCount = count.coerceAtLeast(0).toUInt()
+    }
 
     private var depthFrameCount = 0
     private val floorSectors = mutableSetOf<Int>()
@@ -305,10 +375,16 @@ class CaptureRecorder(
         sparsePoints.clear()
         rejected.clear()
         skippedShots.clear()
-        held?.bitmap?.recycle()
-        held = null
+        synchronized(heldLock) {
+            held?.bitmap?.recycle()
+            held = null
+        }
+        candidateEpoch++
+        alignmentGhost = null
+        alignmentStatus = null
         lastDecision = null
         lastDecisionAtMs = 0
+        lastHeldImageAtMs = 0
         acceptedFrames = 0
         judgedFrames = 0
         lastPose = null
@@ -323,6 +399,7 @@ class CaptureRecorder(
         wallSectors.clear()
         ceilingSectors.clear()
         lastGuidance = null
+        referencePointAdjustments = emptyList()
         if (depthAvailable) {
             File(bundleDir, "depth").mkdirs()
             DepthPng.write(File(bundleDir, DEPTH_SELF_TEST_PATH), verifiedDepth!!)
@@ -334,12 +411,13 @@ class CaptureRecorder(
         // the script's yaw origin, so this must happen with the user already
         // standing where they mean to start.
         guidance?.startScript()
+        stopping = false
         recording = true
     }
 
     /** Call once per ARCore frame. Cheap gates run before any image work. */
     fun onFrame(frame: Frame) {
-        if (!recording) return
+        if (!recording || stopping) return
         if (keyframes.size >= maxKeyframes) {
             bump("cap_reached")
             return
@@ -399,6 +477,10 @@ class CaptureRecorder(
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastOfferAtMs < OFFER_INTERVAL_MS) return
         lastOfferAtMs = nowMs
+        // Keep the core candidate and the bitmap candidate from the same frame.
+        // Offering an unencodable frame here would make the shutter write old
+        // pixels against a newer pose, which is worse than a slower refresh.
+        if (held != null && nowMs - lastHeldImageAtMs < HELD_IMAGE_INTERVAL_MS) return
 
         val image: Image = try {
             frame.acquireCameraImage()
@@ -407,10 +489,11 @@ class CaptureRecorder(
             return
         }
 
+        var imageHandedToEncoder = false
         try {
-            val gray = luminancePlane(image) ?: run { bump("decode"); return }
-            val blur = varianceOfLaplacian(gray.pixels, gray.width, gray.height)
-            val clip = exposureClipRatio(gray.pixels)
+            val quality = imageQuality(image) ?: run { bump("decode"); return }
+            val blur = quality.blur
+            val clip = quality.exposureClipRatio
 
             // The surface samples the coverage grid integrates. Taken here, on
             // the frame the core is about to judge, so the geometry and the pose
@@ -424,6 +507,30 @@ class CaptureRecorder(
             if (depthAvailable && lastDepthSamples < MIN_DEPTH_SAMPLES) {
                 bump("depth_missing")
                 return
+            }
+
+            // Compare the previous keyframe's metric surface with this frame's
+            // depth while both measurements are already in hand. This is only
+            // a couple of thousand projections at the 2.5 Hz scorer cadence;
+            // the live ghost itself stays entirely on the GPU.
+            if (samples != null) {
+                alignmentGhost?.let { ghost ->
+                    val currentIntrinsics = camera.imageIntrinsics
+                    val dimensions = currentIntrinsics.imageDimensions
+                    val scaleX = samples.width.toFloat() / dimensions[0]
+                    val scaleY = samples.height.toFloat() / dimensions[1]
+                    alignmentStatus = AlignmentGuide.evaluate(
+                        ghost = ghost,
+                        worldFromCamera = matrix,
+                        depthMm = samples.depthMm,
+                        depthWidth = samples.width,
+                        depthHeight = samples.height,
+                        fx = currentIntrinsics.focalLength[0] * scaleX,
+                        fy = currentIntrinsics.focalLength[1] * scaleY,
+                        cx = currentIntrinsics.principalPoint[0] * scaleX,
+                        cy = currentIntrinsics.principalPoint[1] * scaleY,
+                    )
+                }
             }
 
             // The core decides. Blur and exposure are measured here because
@@ -446,7 +553,7 @@ class CaptureRecorder(
                     // TOO_CLOSE nag rather than guessing.
                     medianDepthM = samples?.medianDepthM ?: 0.0f,
                     angularVelocityRadS = angularVelocity,
-                    sparsePointCount = sparsePointsInView(frame),
+                    sparsePointCount = sparsePointCount,
                     lux = frame.lightEstimate?.pixelIntensity?.times(1000f) ?: 200.0f,
                 ),
                 samples?.points ?: emptyList(),
@@ -468,28 +575,76 @@ class CaptureRecorder(
             // only keeps the best recent frame ready for it.
             if (update?.hold != true) return
 
-            // This frame is the best of its viewpoint so far, so it has to be
-            // encoded now — the ARCore image is recycled the moment this
-            // function returns, and the decision to keep it comes later.
-            val bitmap = toBitmap(image, targetWidth) ?: run { bump("encode"); return }
-            held?.bitmap?.recycle()
-            held = HeldFrame(
-                bitmap = bitmap,
-                pose = pose,
-                matrix = matrix.copyOf(),
-                timestampNs = frame.timestamp,
-                blur = blur,
-                clip = clip,
-                samples = samples,
-                rotationDegrees = imageRotationDegrees,
-                intrinsics = FrameConversion.intrinsicsFor(
-                    camera, bitmap.width, bitmap.height, imageRotationDegrees
-                ),
-                shot = pending,
-                sparse = sparseSnapshot(frame),
+            // Full YUV conversion, JPEG compression, rotation and scaling took
+            // 480-670 ms on the S23 Ultra when done here. Android Images remain
+            // valid until closed, so lend exactly one to a serial worker and let
+            // the GL thread return immediately. Depth, pose and sparse evidence
+            // are copied now and therefore still describe these exact pixels.
+            if (!encodingCandidate.compareAndSet(false, true)) return
+            val timestampNs = frame.timestamp
+            val epoch = candidateEpoch
+            val sparse = sparseSnapshot(frame)
+            val sensorIntrinsics = camera.imageIntrinsics
+            val sensorDimensions = sensorIntrinsics.imageDimensions
+            val sensorFocal = sensorIntrinsics.focalLength
+            val sensorPrincipal = sensorIntrinsics.principalPoint
+            val rawIntrinsics = IntrinsicsWire(
+                fx = sensorFocal[0].toDouble(),
+                fy = sensorFocal[1].toDouble(),
+                cx = sensorPrincipal[0].toDouble(),
+                cy = sensorPrincipal[1].toDouble(),
+                width = sensorDimensions[0],
+                height = sensorDimensions[1],
             )
+            try {
+                candidateEncoder.execute {
+                    try {
+                        val bitmap = toBitmap(image, targetWidth)
+                        if (bitmap == null) {
+                            android.util.Log.w("PoseLoggerPerf", "candidate bitmap decode failed")
+                            return@execute
+                        }
+                        val next = HeldFrame(
+                            bitmap = bitmap,
+                            pose = pose,
+                            matrix = matrix.copyOf(),
+                            timestampNs = timestampNs,
+                            blur = blur,
+                            clip = clip,
+                            samples = samples,
+                            rotationDegrees = imageRotationDegrees,
+                            intrinsics = FrameConversion.rotateAndScaleIntrinsics(
+                                rawIntrinsics,
+                                imageRotationDegrees,
+                                bitmap.width,
+                                bitmap.height,
+                            ),
+                            shot = pending,
+                            sparse = sparse,
+                        )
+                        var discarded: Bitmap? = null
+                        synchronized(heldLock) {
+                            if (recording && epoch == candidateEpoch) {
+                                discarded = held?.bitmap
+                                held = next
+                            } else {
+                                discarded = bitmap
+                            }
+                        }
+                        discarded?.recycle()
+                    } finally {
+                        image.close()
+                        encodingCandidate.set(false)
+                    }
+                }
+                imageHandedToEncoder = true
+                lastHeldImageAtMs = nowMs
+            } catch (error: RuntimeException) {
+                encodingCandidate.set(false)
+                bump("encoder_unavailable")
+            }
         } finally {
-            image.close()
+            if (!imageHandedToEncoder) image.close()
         }
     }
 
@@ -501,8 +656,11 @@ class CaptureRecorder(
      * current pose is exactly the smearing the selector exists to avoid.
      */
     private fun writeHeldKeyframe() {
-        val h = held ?: return
-        held = null
+        val h = synchronized(heldLock) {
+            val current = held
+            held = null
+            current
+        } ?: return
         val id = "kf_%04d".format(keyframes.size)
         val rel = "images/$id.jpg"
         File(bundleDir, rel).outputStream().use {
@@ -539,6 +697,7 @@ class CaptureRecorder(
             blurScore = h.blur,
             exposureClipRatio = h.clip,
             depth = depthRel,
+            headingDeg = latestHeadingDeg,
         )
         h.shot?.let { recordSurfaceSector(it, h.samples != null) }
         tagNextKeyframe = false
@@ -547,6 +706,16 @@ class CaptureRecorder(
         for (xyz in h.sparse) {
             sparsePoints += SparsePointWire(xyz = xyz, observations = listOf(id))
         }
+        alignmentGhost = h.samples?.let { samples ->
+            AlignmentGuide.build(
+                bitmap = h.bitmap,
+                samples = samples,
+                intrinsics = h.intrinsics,
+                pose = h.pose,
+                clockwiseRotationDegrees = h.rotationDegrees,
+            )
+        }
+        alignmentStatus = null
         h.bitmap.recycle()
     }
 
@@ -639,7 +808,7 @@ class CaptureRecorder(
                     exposureClipRatio = 0.0f,
                     medianDepthM = 0.0f,
                     angularVelocityRadS = 0.0f,
-                    sparsePointCount = sparsePointsInView(frame),
+                    sparsePointCount = sparsePointCount,
                     lux = frame.lightEstimate?.pixelIntensity?.times(1000f) ?: 200.0f,
                 ),
                 emptyList(),
@@ -663,11 +832,14 @@ class CaptureRecorder(
         trackingBreaks += 1
         tagNextKeyframe = true
         lastPose = null // the previous keyframe is in a different world frame
+        candidateEpoch++
         // The core discards its held candidate across a relocalisation, since
         // its pose is expressed in a frame that no longer exists. The pixels
         // have to go with it or they would be written against the next commit.
-        held?.bitmap?.recycle()
-        held = null
+        synchronized(heldLock) {
+            held?.bitmap?.recycle()
+            held = null
+        }
     }
 
     /**
@@ -689,14 +861,6 @@ class CaptureRecorder(
         return dot >= LOOSE_AIM_COS
     }
 
-    /** How many AR feature points fall in view — the core's texture signal. */
-    private fun sparsePointsInView(frame: Frame): UInt =
-        try {
-            frame.acquirePointCloud().use { (it.points.remaining() / 4).toUInt() }
-        } catch (e: Exception) {
-            0u
-        }
-
     /** One tape measure per room (plan §6.2). */
     fun addTapeMeasure(a: FloatArray, b: FloatArray, measuredMeters: Double) {
         measurements += ReferenceMeasurementWire(
@@ -709,14 +873,23 @@ class CaptureRecorder(
     }
 
     fun stop(): File {
+        stopping = true
+        candidateEncoder.shutdown()
+        // Stopping is already a blocking disk operation. Waiting here preserves
+        // the newest asynchronously encoded candidate instead of silently
+        // dropping the room's final view.
+        candidateEncoder.awaitTermination(2, TimeUnit.SECONDS)
         recording = false
+        candidateEpoch++
         // The last viewpoint is still held, waiting for a move that will never
         // come now. Without this every capture silently loses its final frame.
         if (guidance?.flush() == true) {
             writeHeldKeyframe()
         }
-        held?.bitmap?.recycle()
-        held = null
+        synchronized(heldLock) {
+            held?.bitmap?.recycle()
+            held = null
+        }
         guidance?.destroy()
         guidance = null
         val bundle = SessionBundleWire(
@@ -741,6 +914,12 @@ class CaptureRecorder(
                     type = "vio_scale", measuredValueM = 1.0, sigmaM = 0.03,
                 )
             ) + measurements,
+            // Only a closed loop is a footprint. An abandoned trace is dropped
+            // rather than shipped: the harness would otherwise have to guess
+            // whether three corners meant "an L-shaped room" or "gave up".
+            floorOutline = floorOutline
+                ?.takeIf { it.closed }
+                ?.copy(referencePointAdjustments = referencePointAdjustments),
             skippedShots = skippedShots.map {
                 SkippedShotWire(
                     yawDeg = it.yawDeg.toDouble(),
@@ -772,61 +951,51 @@ class CaptureRecorder(
 
     // -- image quality ------------------------------------------------------
 
-    private class Gray(val pixels: ByteArray, val width: Int, val height: Int)
+    private data class ImageQuality(
+        val blur: Double,
+        val exposureClipRatio: Double,
+    )
 
     /**
-     * ARCore hands back YUV_420_888; the Y plane *is* the luminance image, so
-     * blur and exposure are scored without ever decoding colour.
+     * Blur and exposure are quality gates, not image outputs. Sample every
+     * eighth pixel directly from the Y plane instead of copying and scanning
+     * the full camera image. The Laplacian still uses one-pixel neighbours, so
+     * its score stays on the same scale as the old full-resolution metric.
      */
-    private fun luminancePlane(image: Image): Gray? {
+    private fun imageQuality(image: Image): ImageQuality? {
         if (image.format != android.graphics.ImageFormat.YUV_420_888) return null
         val plane = image.planes[0]
         val buffer = plane.buffer
+        val start = buffer.position()
         val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
         val w = image.width
         val h = image.height
-        val out = ByteArray(w * h)
-        val row = ByteArray(rowStride)
-        var pos = 0
-        for (y in 0 until h) {
-            buffer.position(y * rowStride)
-            val len = min(rowStride, buffer.remaining())
-            buffer.get(row, 0, len)
-            System.arraycopy(row, 0, out, pos, w)
-            pos += w
-        }
-        return Gray(out, w, h)
-    }
+        if (w < 3 || h < 3) return ImageQuality(0.0, 0.0)
 
-    /** Variance of the Laplacian — same metric as the iOS client. */
-    private fun varianceOfLaplacian(pixels: ByteArray, w: Int, h: Int): Double {
-        if (w < 3 || h < 3) return 0.0
+        fun at(x: Int, y: Int): Double =
+            (buffer.get(start + y * rowStride + x * pixelStride).toInt() and 0xFF).toDouble()
+
         var sum = 0.0
         var sumSq = 0.0
         var n = 0.0
-        fun at(i: Int) = (pixels[i].toInt() and 0xFF).toDouble()
-        for (y in 1 until h - 1) {
-            for (x in 1 until w - 1) {
-                val i = y * w + x
-                val lap = -4.0 * at(i) + at(i - 1) + at(i + 1) + at(i - w) + at(i + w)
+        var clipped = 0
+        var sampled = 0
+        for (y in 1 until h - 1 step QUALITY_SAMPLE_STEP) {
+            for (x in 1 until w - 1 step QUALITY_SAMPLE_STEP) {
+                val centre = at(x, y)
+                val lap = -4.0 * centre + at(x - 1, y) + at(x + 1, y) +
+                    at(x, y - 1) + at(x, y + 1)
                 sum += lap
                 sumSq += lap * lap
                 n += 1.0
+                if (centre == 0.0 || centre == 255.0) clipped++
+                sampled++
             }
         }
-        if (n == 0.0) return 0.0
+        if (n == 0.0) return ImageQuality(0.0, 0.0)
         val mean = sum / n
-        return sumSq / n - mean * mean
-    }
-
-    private fun exposureClipRatio(pixels: ByteArray): Double {
-        if (pixels.isEmpty()) return 0.0
-        var clipped = 0
-        for (p in pixels) {
-            val v = p.toInt() and 0xFF
-            if (v == 0 || v == 255) clipped++
-        }
-        return clipped.toDouble() / pixels.size
+        return ImageQuality(sumSq / n - mean * mean, clipped.toDouble() / sampled)
     }
 
     private fun toBitmap(image: Image, targetWidth: Int): Bitmap? {
@@ -838,7 +1007,12 @@ class CaptureRecorder(
         yuv.compressToJpeg(
             android.graphics.Rect(0, 0, image.width, image.height), 95, out
         )
-        val sensor = BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.size()) ?: return null
+        var sample = 1
+        while (image.width / (sample * 2) >= targetWidth) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        val sensor = BitmapFactory.decodeByteArray(
+            out.toByteArray(), 0, out.size(), options
+        ) ?: return null
         val upright = if (imageRotationDegrees == 0) {
             sensor
         } else {
@@ -917,8 +1091,17 @@ class CaptureRecorder(
     }
 
     private companion object {
-        /** Frame budget for the scoring pass: ~10 Hz, well inside the HAL's tolerance. */
-        const val OFFER_INTERVAL_MS = 100L
+        /**
+         * Frame budget for scoring: 2.5 Hz. The UI only needs fresh guidance
+         * while a person moves; sampling every preview frame starves the camera
+         * and creates the very jank capture is meant to avoid.
+         */
+        const val OFFER_INTERVAL_MS = 400L
+        /** A shutter candidate less than 1.2 s old is visually indistinguishable to a user. */
+        const val HELD_IMAGE_INTERVAL_MS = 1_800L
+        // 8 rather than 4 cuts render-thread luminance reads by 4x while still
+        // sampling thousands of pixels on the 640x480 CPU stream.
+        const val QUALITY_SAMPLE_STEP = 8
         const val DEPTH_SELF_TEST_PATH = "depth/self_test.png"
         const val MIN_DEPTH_SAMPLES = 100
         const val MIN_COMPLETION_KEYFRAMES = 24

@@ -1,0 +1,81 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Walk: video and VIO pose</title>
+<style>
+body{margin:0;background:#111;color:#ddd;font-family:system-ui;overflow:hidden}
+#bar{height:44px;display:flex;align-items:center;gap:14px;padding:0 12px;font-size:13px;white-space:nowrap;overflow:hidden}
+#main{display:grid;grid-template-columns:1fr 1.4fr;height:calc(100vh - 44px)}
+#vidbox{position:relative;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
+video{transform:rotate(90deg);height:100%;max-height:none;aspect-ratio:16/9;max-width:none;position:absolute}
+#three{position:relative}#three canvas{display:block}
+#hud{position:absolute;left:10px;top:8px;font:12px monospace;color:#bbb;white-space:pre}
+.k{display:inline-block;width:14px;height:3px;margin-right:4px;vertical-align:middle}
+label{user-select:none}
+</style></head><body>
+<div id="bar"><b>rec_20260903-070045</b>
+<button id="play">play</button>
+<input type="range" id="seek" min="0" max="1000" value="0" style="width:280px"><span id="t">0.0 s</span>
+<span><i class="k" style="background:#fa4"></i>VIO (per frame)</span>
+<span><i class="k" style="background:#4af"></i>COLMAP keyframes</span>
+<label><input type="checkbox" id="follow" checked> follow camera</label>
+<label><input type="checkbox" id="mesh" checked> mesh</label>
+<label><input type="checkbox" id="showref" checked> show COLMAP frustum</label>
+<span id="load" style="color:#888"></span>
+</div>
+<div id="main">
+<div id="vidbox"><video id="v" src="video.mp4" muted playsinline preload="auto"></video></div>
+<div id="three"><div id="hud"></div></div>
+</div>
+<script src="three.min.js"></script><script src="OrbitControls.js"></script><script src="PLYLoader.js"></script>
+<script>
+const v=document.getElementById('v'), seek=document.getElementById('seek'), tl=document.getElementById('t'), hud=document.getElementById('hud');
+const box=document.getElementById('three');
+const renderer=new THREE.WebGLRenderer({antialias:true}); box.appendChild(renderer.domElement);
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x181818);
+const cam=new THREE.PerspectiveCamera(50,1,0.05,100); cam.up.set(0,1,0);
+const ctl=new THREE.OrbitControls(cam,renderer.domElement); ctl.enableDamping=true;
+scene.add(new THREE.HemisphereLight(0xffffff,0x333344,1.0));
+const grid=new THREE.GridHelper(12,12,0x3a3a3a,0x2a2a2a); scene.add(grid);
+let D=null, vioLine, refLine, vioFrustum, refFrustum, trail, meshObj=null;
+function resize(){const w=box.clientWidth,h=box.clientHeight;renderer.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix()}
+window.addEventListener('resize',resize);resize();
+function frustum(color,fovDeg,aspect,depth){const t=Math.tan(fovDeg*Math.PI/360)*depth,r=t*aspect;
+ const p=[[0,0,0],[-r,-t,-depth],[r,-t,-depth],[r,t,-depth],[-r,t,-depth]];
+ const idx=[0,1,0,2,0,3,0,4,1,2,2,3,3,4,4,1, 3,4]; const pts=[];for(const i of idx)pts.push(...p[i]);
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pts,3));
+ const l=new THREE.LineSegments(g,new THREE.LineBasicMaterial({color}));
+ // "up" marker: a small triangle on the top edge
+ const up=new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-r*0.3,t,-depth),new THREE.Vector3(r*0.3,t,-depth),new THREE.Vector3(0,t*1.4,-depth)]),new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide}));
+ l.add(up); return l}
+function poly(arr,color){const pts=arr.map(p=>new THREE.Vector3(p[1],p[2],p[3]));const g=new THREE.BufferGeometry().setFromPoints(pts);return new THREE.Line(g,new THREE.LineBasicMaterial({color,transparent:true,opacity:0.5}))}
+fetch('walk.json').then(r=>r.json()).then(d=>{D=d;
+ // frames are portrait after the 90° rotation: aspect 9:16 in the upright image; the frustum's
+ // "up" edge is the camera +y after rotation — we keep the sensor-native axes so the frustum's
+ // wide side matches the sensor's wide side; the up marker shows which way the phone's top points.
+ const fov=d.fov_deg, aspect=16/9;
+ vioLine=poly(d.vio,0xffaa44);refLine=poly(d.ref,0x44aaff);scene.add(vioLine,refLine);
+ vioFrustum=frustum(0xffaa44,fov,aspect,0.5);refFrustum=frustum(0x44aaff,fov,aspect,0.4);scene.add(vioFrustum,refFrustum);
+ const c=[(d.mesh_min[0]+d.mesh_max[0])/2,d.mesh_min[1],(d.mesh_min[2]+d.mesh_max[2])/2];
+ grid.position.set(c[0],c[1],c[2]); ctl.target.set(c[0],c[1]+1,c[2]); cam.position.set(c[0]+3,c[1]+7,c[2]+5);
+ document.getElementById('load').textContent='loading mesh…';
+ new THREE.PLYLoader().load('mesh.ply',g=>{g.computeVertexNormals();meshObj=new THREE.Mesh(g,new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.FrontSide}));scene.add(meshObj);document.getElementById('load').textContent='';},
+   x=>{document.getElementById('load').textContent='loading mesh… '+Math.round(100*x.loaded/(x.total||18302858))+'%'},e=>{document.getElementById('load').textContent='mesh failed'});
+ seek.max=Math.round(d.duration*100);
+});
+function findPose(arr,t){let lo=0,hi=arr.length-1;while(lo<hi){const m=(lo+hi)>>1;if(arr[m][0]<t)lo=m+1;else hi=m}
+ if(lo>0&&Math.abs(arr[lo-1][0]-t)<Math.abs(arr[lo][0]-t))lo--;return [arr[lo],lo]}
+function setFrustum(f,p){f.position.set(p[1],p[2],p[3]);f.quaternion.set(p[4],p[5],p[6],p[7]);f.visible=true}
+document.getElementById('play').onclick=()=>{v.paused?v.play():v.pause();document.getElementById('play').textContent=v.paused?'play':'pause'};
+seek.oninput=()=>{v.currentTime=seek.value/100};
+document.getElementById('mesh').onchange=e=>{if(meshObj)meshObj.visible=e.target.checked};
+let lastT=-1;
+function tick(){requestAnimationFrame(tick);ctl.update();
+ if(D){const t=v.currentTime;if(t!==lastT){lastT=t;seek.value=Math.round(t*100);tl.textContent=t.toFixed(2)+' s';
+  const [p,i]=findPose(D.vio,t);const dt=Math.abs(p[0]-t);
+  if(dt<0.1){setFrustum(vioFrustum,p);if(document.getElementById('follow').checked){ctl.target.set(p[1],p[2],p[3])}}else vioFrustum.visible=false;
+  const [r,ri]=findPose(D.ref,t);const rdt=Math.abs(r[0]-t);
+  refFrustum.visible=document.getElementById('showref').checked&&rdt<0.3;if(refFrustum.visible)setFrustum(refFrustum,r);
+  let e='';if(dt<0.1&&rdt<0.3){e=`   VIO−COLMAP: ${(100*Math.hypot(p[1]-r[1],p[2]-r[2],p[3]-r[3])).toFixed(0)} cm`}
+  hud.textContent=`t ${t.toFixed(2)} s   VIO pose ${dt<0.1?'#'+i:'none (before init)'}   position ${dt<0.1?p.slice(1,4).map(x=>x.toFixed(2)).join(', ')+' m':''}${e}\nSim(3) scale applied to VIO: ${D.scale.toFixed(3)}   drag to orbit, wheel to zoom`;
+ }}
+ renderer.render(scene,cam)}
+tick();
+</script></body></html>

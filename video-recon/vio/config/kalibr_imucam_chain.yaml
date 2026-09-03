@@ -1,0 +1,19 @@
+%YAML:1.0
+
+# Samsung SM-S918B back camera, video in sensor-native orientation (SENSOR_ORIENTATION 90),
+# frames at 960x540 (half of 1920x1080). R_CtoI is videorecon.imu.device_to_camera(90):
+# the OpenCV camera axes expressed in Android device (= IMU) axes. p_CinI is unknown and
+# starts at zero; the estimator refines both online.
+cam0:
+  T_imu_cam:
+    - [0.0, -1.0, 0.0, 0.0]
+    - [-1.0, 0.0, 0.0, 0.0]
+    - [0.0, 0.0, -1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: []
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [639.2, 639.3, 481.0, 268.5]
+  resolution: [960, 540]
+  rostopic: /cam0/image_raw

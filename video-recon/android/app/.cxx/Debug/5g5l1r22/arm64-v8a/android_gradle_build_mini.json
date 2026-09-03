@@ -1,0 +1,27 @@
+{
+  "buildFiles": [
+    "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/charalambos/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/.cxx/Debug/5g5l1r22/arm64-v8a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/charalambos/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/.cxx/Debug/5g5l1r22/arm64-v8a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "livescan::@6890427a1f51a3e7e1df": {
+      "artifactName": "livescan",
+      "abi": "arm64-v8a",
+      "output": "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/build/intermediates/cxx/Debug/5g5l1r22/obj/arm64-v8a/liblivescan.so",
+      "runtimeFiles": []
+    }
+  }
+}

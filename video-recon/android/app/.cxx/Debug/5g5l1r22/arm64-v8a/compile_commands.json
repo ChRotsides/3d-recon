@@ -1,0 +1,12 @@
+[
+{
+  "directory": "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/.cxx/Debug/5g5l1r22/arm64-v8a",
+  "command": "/home/charalambos/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android31 --sysroot=/home/charalambos/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DROS_AVAILABLE=0 -Dlivescan_EXPORTS -I/home/charalambos/ai/vio/env/include -I/home/charalambos/ai/vio/env/include/eigen3 -I/home/charalambos/ai/phone/ov_android/ov_core -I/home/charalambos/ai/phone/ov_android/ov_init -I/home/charalambos/ai/phone/ov_android/ov_msckf -isystem /home/charalambos/ai/phone/OpenCV-android-sdk/sdk/native/jni/include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -O2 -Wno-deprecated-declarations -include cassert -o CMakeFiles/livescan.dir/livescan.cpp.o -c /home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/src/main/cpp/livescan.cpp",
+  "file": "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/src/main/cpp/livescan.cpp"
+},
+{
+  "directory": "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/.cxx/Debug/5g5l1r22/arm64-v8a",
+  "command": "/home/charalambos/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android31 --sysroot=/home/charalambos/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DROS_AVAILABLE=0 -Dlivescan_EXPORTS -I/home/charalambos/ai/vio/env/include -I/home/charalambos/ai/vio/env/include/eigen3 -I/home/charalambos/ai/phone/ov_android/ov_core -I/home/charalambos/ai/phone/ov_android/ov_init -I/home/charalambos/ai/phone/ov_android/ov_msckf -isystem /home/charalambos/ai/phone/OpenCV-android-sdk/sdk/native/jni/include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -O2 -Wno-deprecated-declarations -include cassert -o CMakeFiles/livescan.dir/tsdf.cpp.o -c /home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/src/main/cpp/tsdf.cpp",
+  "file": "/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/src/main/cpp/tsdf.cpp"
+}
+]

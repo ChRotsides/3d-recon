@@ -1,0 +1,152 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Walk viewer</title>
+<style>
+body{margin:0;background:#111;color:#ddd;font-family:system-ui;overflow:hidden}
+#bar{height:44px;display:flex;align-items:center;gap:12px;padding:0 12px;font-size:13px;white-space:nowrap;overflow:hidden}
+#main{display:grid;grid-template-columns:1fr 1.4fr;height:calc(100vh - 44px)}
+#left{display:grid;grid-template-rows:1fr 1fr;min-height:0}#vidbox,#depthbox{position:relative;background:#000;overflow:hidden}#depthbox{display:flex;align-items:center;justify-content:center}#depthbox canvas{display:block}#dlabel{position:absolute;left:8px;top:6px;font:12px monospace;color:#ccc;pointer-events:none;white-space:pre}
+video{display:none}#vc{display:block}
+#three{position:relative}#three canvas{display:block}
+#hud{position:absolute;left:10px;top:8px;font:12px monospace;color:#ccc;white-space:pre;pointer-events:none}
+.k{display:inline-block;width:14px;height:3px;margin-right:4px;vertical-align:middle}
+label{user-select:none} a{color:#8cf}
+</style></head><body>
+<div id="bar"><a href="index.html">all walks</a> <b id="title"></b>
+<button id="play">play</button>
+<input type="range" id="seek" min="0" max="1000" value="0" style="width:220px"><span id="t">0.0 s</span>
+<span>frustum follows: <select id="run"></select></span>
+<span id="legend"></span>
+<label><input type="checkbox" id="follow" checked> follow</label> <label><input type="checkbox" id="pov"> camera POV</label>
+<label id="meshlbl"><input type="checkbox" id="mesh" checked> mesh</label> <label id="cloudlbl"><input type="checkbox" id="cloud" checked> depth cloud</label> <label><input type="checkbox" id="fuse" checked> TSDF fusion</label> <span>voxel <select id="voxel"><option value="0.02">2 cm</option><option value="0.03" selected>3 cm</option><option value="0.04">4 cm</option></select></span> <label><input type="checkbox" id="rgbcol" checked> video colour</label> <span>depth res: <select id="res"><option value="181" selected>181 px short side</option><option value="362">362 px short side</option></select></span> <span>panel: <select id="panel"><option value="cloud">cloud from camera pose</option><option value="map">depth map</option></select></span> <span id="cloudinfo" style="color:#999"></span>
+<span id="load" style="color:#888"></span>
+</div>
+<div id="main">
+<div id="left"><div id="vidbox"><video id="v" muted playsinline preload="auto" crossorigin="anonymous"></video><canvas id="vc"></canvas></div><div id="depthbox"><canvas id="pc"></canvas><canvas id="dc" style="display:none"></canvas><div id="dlabel">live depth: waiting for playback</div></div></div>
+<div id="three"><div id="hud"></div></div>
+</div>
+<script src="three.min.js"></script><script src="OrbitControls.js"></script><script src="PLYLoader.js"></script><script src="tsdf.js"></script>
+<script>
+const rec=new URLSearchParams(location.search).get('rec')||'rec0045';
+document.getElementById('title').textContent=rec;
+const COLORS=[0xffaa44,0xff5577,0x88ff66,0xdd88ff,0xffff66]; const REF=0x44aaff;
+const v=document.getElementById('v'), seek=document.getElementById('seek'), tl=document.getElementById('t'), hud=document.getElementById('hud'), box=document.getElementById('three');
+v.src=rec+'/video_proxy.mp4';v.addEventListener('error',()=>{if(!v.dataset.fallback){v.dataset.fallback='1';v.src=rec+'/video.mp4'}},{once:true});   // 960x540 2 Mbit/s proxy for streaming; the server decodes the original for depth
+// media elements do not retry a request that was cut off while the page was still loading: watch and reload
+let vRetries=0;const vWatch=setInterval(()=>{if(v.readyState>=1||vRetries>=5){if(v.readyState>=1)clearInterval(vWatch);return}vRetries++;const t=v.currentTime;v.load();v.currentTime=t;console.warn('video: no data yet, reload attempt',vRetries)},3000);
+const renderer=new THREE.WebGLRenderer({antialias:false,powerPreference:'high-performance'}); renderer.setPixelRatio(Math.min(1,window.devicePixelRatio)); box.appendChild(renderer.domElement);
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x181818);
+const cam=new THREE.PerspectiveCamera(50,1,0.05,200); cam.up.set(0,1,0);
+const ctl=new THREE.OrbitControls(cam,renderer.domElement); ctl.enableDamping=true;
+scene.add(new THREE.HemisphereLight(0xffffff,0x333344,1.0));
+const grid=new THREE.GridHelper(16,16,0x3a3a3a,0x2a2a2a); scene.add(grid);
+let D=null, frustums={}, refFrustum=null, meshObj=null, names=[];
+function resize(){const w=box.clientWidth,h=box.clientHeight;renderer.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix()}
+window.addEventListener('resize',resize);resize();
+function frustum(color,fovDeg,aspect,depth){const t=Math.tan(fovDeg*Math.PI/360)*depth,r=t*aspect;
+ const p=[[0,0,0],[-r,-t,-depth],[r,-t,-depth],[r,t,-depth],[-r,t,-depth]];const idx=[0,1,0,2,0,3,0,4,1,2,2,3,3,4,4,1];const pts=[];for(const i of idx)pts.push(...p[i]);
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pts,3));
+ const l=new THREE.LineSegments(g,new THREE.LineBasicMaterial({color}));
+ l.add(new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-r*0.3,t,-depth),new THREE.Vector3(r*0.3,t,-depth),new THREE.Vector3(0,t*1.4,-depth)]),new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide})));return l}
+function poly(arr,color,op){const g=new THREE.BufferGeometry().setFromPoints(arr.map(p=>new THREE.Vector3(p[1],p[2],p[3])));return new THREE.Line(g,new THREE.LineBasicMaterial({color,transparent:true,opacity:op}))}
+const markers=[];function marker(p,color){const m=new THREE.Mesh(new THREE.SphereGeometry(0.04,10,10),new THREE.MeshBasicMaterial({color}));m.position.set(p[1],p[2],p[3]);markers.push(m);return m}
+const hex=c=>'#'+c.toString(16).padStart(6,'0');
+fetch(rec+'/walk.json').then(r=>r.json()).then(d=>{D=d;names=Object.keys(d.runs);const fov=d.fov_deg,aspect=16/9;const sel=document.getElementById('run');let leg='';
+ names.forEach((n,i)=>{const c=COLORS[i%COLORS.length];scene.add(poly(d.runs[n],c,0.7));scene.add(marker(d.runs[n][0],c));frustums[n]=frustum(c,fov,aspect,0.5);frustums[n].visible=false;scene.add(frustums[n]);
+  const o=document.createElement('option');o.value=n;o.textContent=n;sel.appendChild(o);const nt=d.notes[n];
+  leg+=`<span><i class="k" style="background:${hex(c)}"></i>${n} <span style="color:#999">(drift ${nt.start_end_drift_cm} cm${d.ref?', vs COLMAP '+nt.vs_base_median_cm+' cm':''})</span></span> `});
+ if(d.ref){scene.add(poly(d.ref,REF,0.6));refFrustum=frustum(REF,fov,aspect,0.4);scene.add(refFrustum);leg+=`<span><i class="k" style="background:${hex(REF)}"></i>COLMAP keyframes</span>`}
+ document.getElementById('legend').innerHTML=leg;
+ let all=[].concat(...names.map(n=>d.runs[n]));const mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];for(const p of all)for(let i=0;i<3;i++){mn[i]=Math.min(mn[i],p[1+i]);mx[i]=Math.max(mx[i],p[1+i])}
+ if(d.mesh){mn[0]=d.mesh.min[0];mn[1]=d.mesh.min[1];mn[2]=d.mesh.min[2];mx[0]=d.mesh.max[0];mx[2]=d.mesh.max[2]}
+ const c=[(mn[0]+mx[0])/2,d.mesh?mn[1]:mn[1]-1.3,(mn[2]+mx[2])/2];grid.position.set(c[0],c[1],c[2]);ctl.target.set(c[0],c[1]+1,c[2]);cam.position.set(c[0]+3,c[1]+7,c[2]+5);
+ if(d.mesh){document.getElementById('load').textContent='loading mesh…';new THREE.PLYLoader().load(rec+'/mesh.ply',g=>{g.computeVertexNormals();meshObj=new THREE.Mesh(g,new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.FrontSide}));scene.add(meshObj);document.getElementById('load').textContent=''},
+   x=>{document.getElementById('load').textContent='loading mesh… '+Math.round(100*x.loaded/(x.total||18e6))+'%'},()=>{document.getElementById('load').textContent='mesh failed'})}
+ else document.getElementById('meshlbl').style.display='none';
+ seek.max=Math.round(d.duration*100);
+});
+function findPose(arr,t){let lo=0,hi=arr.length-1;while(lo<hi){const m=(lo+hi)>>1;if(arr[m][0]<t)lo=m+1;else hi=m}if(lo>0&&Math.abs(arr[lo-1][0]-t)<Math.abs(arr[lo][0]-t))lo--;return arr[lo]}
+function setF(f,p){f.position.set(p[1],p[2],p[3]);f.quaternion.set(p[4],p[5],p[6],p[7]);f.visible=true}
+document.getElementById('play').onclick=()=>{v.paused?v.play():v.pause();document.getElementById('play').textContent=v.paused?'play':'pause'};
+seek.oninput=()=>{v.currentTime=seek.value/100};
+document.getElementById('mesh').onchange=e=>{if(meshObj)meshObj.visible=e.target.checked};
+document.getElementById('pov').onchange=e=>{if(!e.target.checked){const t=ctl.target;cam.position.set(t.x+3,t.y+4,t.z+3);cam.up.set(0,1,0);cam.lookAt(t)}};
+let lastT=-1;const vc=document.getElementById('vc'),vg=vc.getContext('2d'),vb=document.getElementById('vidbox');
+// ---- live depth: DA3-Small runs on the server at playback time, on the frame at the video's current time,
+// conditioned on the VIO poses of the last few requested frames. Nothing precomputed.
+let DEP={frames:[]}, depthCache={}, cloudPts=null, cloudGeom=null, cloudCount=0, cloudBuilt=new Set(), inflight=0, lastReqT=-1e9, liveStats='';const MAX_INFLIGHT=2;
+const MAX_PTS=4000000, MIN_DT=0.1;const strideFor=W=>W>=600?4:2;
+const dc=document.getElementById('dc'), dg=dc.getContext('2d'), db=document.getElementById('depthbox'), dlabel=document.getElementById('dlabel');
+cloudGeom=new THREE.BufferGeometry();cloudGeom.setAttribute('position',new THREE.BufferAttribute(new Float32Array(MAX_PTS*3),3).setUsage(THREE.DynamicDrawUsage));
+cloudGeom.setAttribute('color',new THREE.BufferAttribute(new Float32Array(MAX_PTS*3),3).setUsage(THREE.DynamicDrawUsage));cloudGeom.setDrawRange(0,0);
+cloudPts=new THREE.Points(cloudGeom,new THREE.PointsMaterial({size:0.03,vertexColors:true}));cloudPts.frustumCulled=false;cloudPts.layers.enable(1);scene.add(cloudPts);
+const pc=document.getElementById('pc'),povRenderer=new THREE.WebGLRenderer({canvas:pc,antialias:false});povRenderer.setPixelRatio(1);povRenderer.setClearColor(0x000000);
+const povCam=new THREE.PerspectiveCamera(60,9/16,0.05,100);povCam.layers.set(1);let lastSelP=null;
+function renderPOV(){const mode=document.getElementById('panel').value;pc.style.display=mode==='cloud'?'block':'none';dc.style.display=mode==='map'?'block':'none';if(mode!=='cloud')return;
+ const bh=db.clientHeight,bw=Math.min(db.clientWidth,Math.round(bh*1080/1920));if(pc.width!==bw||pc.height!==bh){povRenderer.setSize(bw,bh,false);pc.style.width=bw+'px';pc.style.height=bh+'px'}
+ if(!lastSelP||!D)return;const p=lastSelP;povCam.position.set(p[1],p[2],p[3]);povCam.quaternion.set(p[4],p[5],p[6],p[7]);
+ povCam.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),Math.PI/2));   // sensor-native -> upright
+ // the landscape frame's horizontal fov becomes the upright view's vertical fov
+ povCam.fov=2*Math.atan((1920/1080)*Math.tan(D.fov_deg*Math.PI/360))*180/Math.PI;povCam.aspect=bw/bh;povCam.updateProjectionMatrix();
+ povRenderer.render(scene,povCam);}
+const turbo=t=>{t=Math.max(0,Math.min(1,t));const c=x=>Math.round(255*Math.max(0,Math.min(1,x/255)));
+ const r=c(34.61+t*(1172.33-t*(10793.56-t*(33300.12-t*(38394.49-t*14825.05)))));const g=c(23.31+t*(557.33+t*(1225.33-t*(3574.96-t*(1073.77+t*707.56)))));const b=c(27.2+t*(3211.1-t*(15327.97-t*(27814.0-t*(22569.18-t*6838.66)))));return [r,g,b]};
+function showDepth(f,dm){const W=f.w,H=f.h;const bw=db.clientWidth,bh=db.clientHeight;if(dc.width!==bw||dc.height!==bh){dc.width=bw;dc.height=bh}
+ const img=dg.createImageData(W,H);let mx=0;for(let k=0;k<W*H;k++)if(dm[k]>mx)mx=dm[k];const inv=1/Math.max(1,mx);
+ for(let k=0;k<W*H;k++){const v=dm[k];const c=v?turbo(1-Math.sqrt(v*inv)):[0,0,0];img.data[4*k]=c[0];img.data[4*k+1]=c[1];img.data[4*k+2]=c[2];img.data[4*k+3]=255}
+ const off=document.createElement('canvas');off.width=W;off.height=H;off.getContext('2d').putImageData(img,0,0);
+ const sc=Math.min(bw/H,bh/W);dg.fillStyle='#000';dg.fillRect(0,0,bw,bh);dg.save();dg.translate(bw/2,bh/2);dg.rotate(Math.PI/2);dg.drawImage(off,-W*sc/2,-H*sc/2,W*sc,H*sc);dg.restore();
+ dlabel.textContent=`live depth @ ${f.t.toFixed(2)} s   DA3-Small ${W}×${H}, window ${f.window}   decode ${f.ms_decode} ms, model ${f.ms_model} ms   max ${(mx/1000).toFixed(1)} m`;}
+function addCloud(f,dm,rgb){const useRGB=rgb&&document.getElementById('rgbcol').checked;const STRIDE=strideFor(f.w);const W=f.w,H=f.h,fx=f.fx,fy=f.fy,cx=f.cx,cy=f.cy;const q=new THREE.Quaternion(f.q[0],f.q[1],f.q[2],f.q[3]);const e=new THREE.Matrix4().makeRotationFromQuaternion(q).elements;
+ const pos=cloudGeom.attributes.position.array,col=cloudGeom.attributes.color.array;let n=cloudCount;
+ for(let y=STRIDE>>1;y<H;y+=STRIDE)for(let x=STRIDE>>1;x<W;x+=STRIDE){const z=dm[y*W+x]/1000;if(!z||z>8||n>=MAX_PTS)continue;
+  const X=(x-cx)/fx*z,Y=-(y-cy)/fy*z,Z=-z;
+  pos[3*n]=e[0]*X+e[4]*Y+e[8]*Z+f.c[0];pos[3*n+1]=e[1]*X+e[5]*Y+e[9]*Z+f.c[1];pos[3*n+2]=e[2]*X+e[6]*Y+e[10]*Z+f.c[2];
+  if(useRGB){const sx=Math.min(rgb.w-1,Math.round(x*rgb.w/W)),sy=Math.min(rgb.h-1,Math.round(y*rgb.h/H));const k=4*(sy*rgb.w+sx);col[3*n]=rgb.data[k]/255;col[3*n+1]=rgb.data[k+1]/255;col[3*n+2]=rgb.data[k+2]/255}
+  else{const c=turbo(1-Math.sqrt(z/8));col[3*n]=c[0]/255;col[3*n+1]=c[1]/255;col[3*n+2]=c[2]/255}n++}
+ cloudCount=n;cloudGeom.setDrawRange(0,n);for(const a of [cloudGeom.attributes.position,cloudGeom.attributes.color]){a.updateRange={offset:0,count:n*3};a.needsUpdate=true}}
+let fuseStats='',worker=null,workerBusy=false,pendingJob=null;
+function newTSDF(){if(worker)worker.terminate();worker=new Worker('tsdf-worker.js');workerBusy=false;pendingJob=null;
+ worker.postMessage({type:'reset',opts:{voxel:parseFloat(document.getElementById('voxel').value),truncVoxels:4,minWeight:2,maxWeight:16,maxDepth:6}});
+ worker.onmessage=e=>{const m=e.data;if(m.type==='surface'){const pos=new Float32Array(m.pos),col=new Float32Array(m.col);cloudGeom.attributes.position.array.set(pos);cloudGeom.attributes.color.array.set(col);
+   cloudCount=m.n;cloudGeom.setDrawRange(0,m.n);for(const a of [cloudGeom.attributes.position,cloudGeom.attributes.color]){a.updateRange={offset:0,count:m.n*3};a.needsUpdate=true}const st=m.stats;
+   fuseStats=`TSDF ${st.blocks} blocks, ${(st.voxels/1e6).toFixed(2)} M voxels, ${st.mb} MB | integrate ${st.integrate_ms.toFixed(0)} ms (${st.blocks_touched} blocks) | extract ${st.extract_ms.toFixed(0)} ms (worker)`;}
+  workerBusy=false;if(pendingJob){const j=pendingJob;pendingJob=null;postJob(j)}}}
+function postJob(j){workerBusy=true;const tr=[j.depth];if(j.rgb)tr.push(j.rgb);worker.postMessage(j,tr)}
+newTSDF();document.getElementById('voxel').onchange=()=>{resetCloud()};document.getElementById('fuse').onchange=()=>{resetCloud()};
+function integrate(f,dm,rgb){
+ const q=new THREE.Quaternion(f.q[0],f.q[1],f.q[2],f.q[3]);const e=new THREE.Matrix4().makeRotationFromQuaternion(q).elements;
+ const R=[e[0],-e[4],-e[8], e[1],-e[5],-e[9], e[2],-e[6],-e[10]];const useRGB=rgb&&document.getElementById('rgbcol').checked;
+ const job={type:'integrate',depth:dm.buffer,w:f.w,h:f.h,K:{fx:f.fx,fy:f.fy,cx:f.cx,cy:f.cy},R,c:f.c,rgb:useRGB?rgb.data.buffer:null,rgbw:rgb?rgb.w:0,rgbh:rgb?rgb.h:0,stride:f.w>=600?2:1,max:MAX_PTS};
+ if(workerBusy)pendingJob=job;else postJob(job);}   // if the worker lags, the newest frame wins
+function resetCloud(){cloudCount=0;cloudBuilt.clear();DEP.frames=[];cloudGeom.setDrawRange(0,0);lastReqT=-1e9;newTSDF();fuseStats=''}
+const rgbCanvas=document.createElement('canvas');
+function grabRGB(){if(v.readyState<2||!v.videoWidth)return null;const W=644,H=Math.round(644*v.videoHeight/v.videoWidth);if(rgbCanvas.width!==W||rgbCanvas.height!==H){rgbCanvas.width=W;rgbCanvas.height=H}
+ const g=rgbCanvas.getContext('2d',{willReadFrequently:true});g.drawImage(v,0,0,W,H);return {w:W,h:H,data:g.getImageData(0,0,W,H).data}}
+function requestDepth(t){if(inflight>=MAX_INFLIGHT||v.paused||t-lastReqT<MIN_DT)return;inflight++;lastReqT=t;const tReq=performance.now();const run=document.getElementById('run').value;const rgb=grabRGB();
+ fetch(`/depth?rec=${rec}&run=${encodeURIComponent(run)}&t=${t.toFixed(3)}&res=${document.getElementById('res').value}`,{cache:'no-store'}).then(async r=>{if(!r.ok){liveStats='server: '+await r.text();return}
+  const b=await r.arrayBuffer();const n=new DataView(b).getUint32(0,true);const f=JSON.parse(new TextDecoder().decode(new Uint8Array(b,4,n)));const dm=new Uint16Array(b.slice(4+n));
+  DEP.frames.push(f);const panelCloud=document.getElementById('panel').value==='cloud';if(!panelCloud)showDepth(f,dm);if(document.getElementById('fuse').checked)integrate(f,dm,rgb);else addCloud(f,dm,rgb);if(panelCloud)dlabel.textContent=`cloud from camera pose   ${(cloudCount/1e6).toFixed(2)} M points   last depth @ ${f.t.toFixed(2)} s, model ${f.ms_model} ms`;liveStats=`${DEP.frames.length} frames, ${(cloudCount/1e6).toFixed(2)} M points, last: model ${f.ms_model} ms, round trip ${Math.round(performance.now()-tReq)} ms | ${fuseStats}`}).catch(e=>{liveStats='error '+e}).finally(()=>{inflight--})}
+function updateDepth(t){requestDepth(t);cloudPts.visible=document.getElementById('cloud').checked}
+v.addEventListener('seeking',()=>{if(DEP.frames.length&&v.currentTime<DEP.frames[DEP.frames.length-1].t)resetCloud()});
+function drawVideo(){const W=vb.clientWidth,H=vb.clientHeight;if(vc.width!==W||vc.height!==H){vc.width=W;vc.height=H}
+ if(v.readyState<2||!v.videoWidth){vg.fillStyle='#000';vg.fillRect(0,0,W,H);vg.fillStyle='#888';vg.font='13px monospace';vg.fillText('video: '+(v.error?('error '+v.error.code+' (codec unsupported?)'):'loading… readyState '+v.readyState),12,24);return}
+ // rotate the sensor-native landscape frame 90° clockwise to upright, fit in the box
+ const vw=v.videoWidth,vh=v.videoHeight;const s=Math.min(W/vh,H/vw);vg.fillStyle='#000';vg.fillRect(0,0,W,H);
+ vg.save();vg.translate(W/2,H/2);vg.rotate(Math.PI/2);vg.drawImage(v,-vw*s/2,-vh*s/2,vw*s,vh*s);vg.restore()}
+let lastMain=0,lastPov=0,lastText=0;
+let vidFrameReady=true;if('requestVideoFrameCallback' in v){const onVF=()=>{vidFrameReady=true;v.requestVideoFrameCallback(onVF)};v.requestVideoFrameCallback(onVF)}
+function tick(){requestAnimationFrame(tick);const now=performance.now();if(!document.getElementById('pov').checked)ctl.update();if(vidFrameReady){drawVideo();if('requestVideoFrameCallback' in v)vidFrameReady=false}
+ if(D){const t=v.currentTime;if(t!==lastT){lastT=t;updateDepth(t);seek.value=Math.round(t*100);tl.textContent=t.toFixed(2)+' s';const selName=document.getElementById('run').value;let lines=[`t ${t.toFixed(2)} s`];let selP=null;
+  for(const n of names){const p=findPose(D.runs[n],t);const ok=Math.abs(p[0]-t)<0.1;if(ok)setF(frustums[n],p);else frustums[n].visible=false;if(n===selName&&ok)selP=p;
+   lines.push(`${n.padEnd(24)} ${ok?p.slice(1,4).map(x=>x.toFixed(2).padStart(6)).join(' ')+' m':'no pose yet'}`)}
+  if(refFrustum){const r=findPose(D.ref,t);const ok=Math.abs(r[0]-t)<0.3;refFrustum.visible=ok;if(ok){setF(refFrustum,r);lines.push(`${'COLMAP'.padEnd(24)} ${r.slice(1,4).map(x=>x.toFixed(2).padStart(6)).join(' ')} m`)}}
+  const pov=document.getElementById('pov').checked;ctl.enabled=!pov;
+  lastSelP=selP||lastSelP;if(selP&&pov){cam.position.set(selP[1],selP[2],selP[3]);cam.quaternion.set(selP[4],selP[5],selP[6],selP[7]);
+   // sensor-native frame is landscape with the phone's top to the left; roll the view 90° so it matches the upright video
+   cam.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),Math.PI/2));cam.fov=D.fov_deg*1.15;cam.updateProjectionMatrix();
+   for(const n of names)frustums[n].visible=false;if(refFrustum)refFrustum.visible=false;for(const m of markers)m.visible=false;}
+  else{for(const m of markers)m.visible=true;if(cam.fov!==50){cam.fov=50;cam.updateProjectionMatrix()}if(selP&&document.getElementById('follow').checked)ctl.target.set(selP[1],selP[2],selP[3]);}
+  lines.push(`frame: ${D.base}${D.ref?' (VIO Sim(3)-aligned)':' (metric, Y up)'}   drag to orbit, wheel to zoom`);if(now-lastText>=250){lastText=now;hud.textContent=lines.join('\n');document.getElementById('cloudinfo').textContent=liveStats}}}
+ if(now-lastMain>=40){lastMain=now;renderer.render(scene,cam)}
+ if(now-lastPov>=100){lastPov=now;renderPOV()}}
+tick();
+</script></body></html>

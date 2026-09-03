@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Video Scan</string>
+    <string name="start">Start recording</string>
+    <string name="stop">Stop</string>
+    <string name="opening_camera">Opening camera…</string>
+    <string name="ready">Ready. Walk slowly, keep the phone upright, overlap everything.</string>
+    <string name="camera_permission_needed">Camera permission is required to record.</string>
+</resources>

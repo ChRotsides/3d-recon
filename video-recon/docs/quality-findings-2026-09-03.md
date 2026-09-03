@@ -203,3 +203,107 @@ but that path has not yet been exercised on this recording.
    sensors' orientation as a soft prior in a final pose-graph refinement so
    drift cannot exceed what the gyroscope allows.
 7. **Pin the scale** with the real phone height or one measured dimension.
+
+
+---
+
+# Round 2 — what is still wrong after the fixes (measured on the corrected run)
+
+## R1. The floor error is a per-frame plateau, not a gradient
+
+Per pixel whose ray hits the known floor plane, predicted depth ÷ distance to
+the plane, by distance:
+
+| true distance to floor | median ratio | p25 | p75 |
+| --- | --- | --- | --- |
+| 0.5–1.5 m | 1.00 | 0.81 | 1.01 |
+| 1.5–2.5 m | 0.68 | 0.66 | 0.97 |
+| 2.5–3.5 m | 0.68 | 0.65 | 0.96 |
+| 3.5–5 m | 0.68 | 0.64 | 0.85 |
+| 5–8 m | 0.68 | 0.64 | 0.85 |
+
+The ratio is not distance-dependent, so it is not depth compression. It is
+**bimodal**: in roughly 40 % of frames the floor is right (ratio ≈ 0.97) and
+in the rest it sits at 0.68 of its true distance — the model puts the floor
+as if the camera were **1.0 m** above it instead of 1.5 m, uniformly across
+that frame, while the walls in the same frame are anchored correctly. A
+scalar or even an affine-per-frame anchor cannot express "walls right, floor
+wrong". Only a correction that knows where the floor is can.
+
+*Settled by the user:* 177 cm tall, phone at chest height, so the camera was
+**1.30 m** above the floor. That rules out the depth model's 1.0 m and shows
+the 1.5 m default was 15 % high; 1.30 m is now the default and the reference
+run was rescaled (0.414 m per unit; room footprint 5.8 × 3.7 m, walk 17.7 m).
+The sparse slab is therefore the real floor and the 0.68 plateau is the
+model's error, as assumed above. (A CLI bug found on the way: `--camera-height`
+and `--scale-source` were parsed but never passed to the pipeline; fixed, with
+a test that every flag reaches `Options`.)
+
+## R2. The remaining doubled walls come from pose drift, not from depth
+
+Fit a plane to the floor band of the **sparse** points (SfM only, no depth
+model): tilted **1.36°** from the sensors' gravity, 1.8 cm of height per metre
+along the walk's main axis. The fused cloud's floor tilts by the same
+1.29°. Depth cannot cause a tilt in COLMAP's own points; this is the
+reconstruction slowly rotating along the walk, i.e. drift with no loop
+closure, which the sensor-residual plot showed rising to 5–14° at the end.
+Over the 7 m walk 1.3° is 16 cm of height and, at 3 m range, 7 cm of lateral
+wall offset from tilt alone — plus whatever the end-of-walk 5–14° adds.
+
+The sensors already know every frame's pitch and roll to about a degree, and
+COLMAP never uses that. The fix is a post-SfM refinement with the gravity
+direction as a per-frame prior (a pose graph with the sequential relative
+poses from COLMAP plus a soft absolute-orientation term per frame), which
+takes the rotational drift out; position drift then needs a loop closure in
+the recording.
+
+## R3. Motion blur is a first-order factor
+
+5-keyframe depth disagreement, sharpest quarter of keyframes vs blurriest
+quarter: **1.2 % vs 5.1 %**. The five worst keyframes (disagreement 7.5–8.9 %)
+have blur scores 14–21 against a median of 341 — they are smeared and should
+never have been chosen. The keyframe selector takes the sharpest of ±3
+frames but has no absolute floor. Fix: reject candidates below a fraction of
+the running median blur and widen the window during fast turns; and, at
+recording time, slow down.
+
+## R4. The mesh is one piece; coverage is the gap
+
+630 k triangles in 4 components, 98.5 % in the largest (94 m² of surface).
+Fragmentation is solved. Of horizontal surface, 28 % is at floor level and
+40 % at ceiling level; the ceiling and the blank walls are where the depth
+model has no anchors and the sparse cloud has no points, so their placement
+is the model's guess. A ~7 × 6 m room with a 2.7 m ceiling has ~150 m² of
+surface; 94 m² fused means about a third is missing or collapsed.
+
+## What "production ready" is still missing, beyond the geometry
+
+* **Runtime**: 65 of the 80 minutes are CPU SIFT matching of 94 k pairs.
+  GPU SIFT or a vocabulary tree brings that to minutes; on the H100 the whole
+  run is under ten.
+* **Scale** is an assumption (§7) — needs the phone height or a measured
+  object, or a metric depth model trusted enough to set it.
+* **No loop closure** and no use of the sensors after alignment (R2).
+* **No ground truth**. Every number above is self-consistency. One room with
+  three tape-measured distances would turn "better" into "how far off".
+* **Failure handling**: the pipeline stops on a failed SfM with a rotation-
+  only bundle and no depth; there is no partial-model merging, no retry with
+  different keyframe density, no report to the phone.
+* **The app** has no pause, no storage check, no recording review, no
+  guidance about speed or overlap while recording; it never tells the user
+  that a stretch was too blurry to use.
+* **The GPU**: the DA3 clamp, FP32 and small windows are Kepler-specific;
+  large + 16-frame windows is the configuration the model was built for.
+
+## Next work, in order
+
+1. Gravity-prior pose refinement after COLMAP (R2). Removes the 1.3° tilt
+   and most of the end-of-walk drift; all inputs already exist.
+2. Floor-aware depth correction (R1): detect floor pixels by ray/plane
+   geometry, snap the 0.68 plateau frames to the plane, re-fuse. Cheap; test
+   against the ceiling-height answer first.
+3. Blur gating in keyframe selection (R3). One line of policy.
+4. Scale is now pinned by the camera height (±4 %); one measured distance in the room would confirm it.
+5. Move depth to the H100 (large, 16-frame windows) and add COLMAP MVS
+   there for textured surfaces; fuse both.
+6. Record the next walk slower and ending on its starting view.

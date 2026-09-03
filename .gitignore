@@ -49,3 +49,4 @@ core/bindings/
 # Archived: everything outside the capture-to-cloud path (docs/capture-to-cloud.md)
 archive/
 .playwright-mcp/
+.env

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -373,6 +374,8 @@ def _analyse_images(
     confidence_threshold: float,
     match_confidence: float,
     minimum_gradient_correlation: float,
+    pair_window: int | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> _Analysis:
     if len(images) < 2:
         raise ValueError("at least two images are required")
@@ -389,12 +392,23 @@ def _analyse_images(
         )
         for image in gray
     ]
+    if progress is not None:
+        progress(f"extracting features from {len(images)} images")
     features = [_extract_rootsift(image) for image in images]
     ratio_threshold = 1.0 - match_confidence
 
     candidates: list[_MatchedEdge] = []
     count = len(images)
-    for first, second in itertools.combinations(range(count), 2):
+    pairs = _capture_order_pairs(count, pair_window)
+    if progress is not None:
+        progress(f"matching {len(pairs)} candidate image pairs")
+    report_every = max(1, len(pairs) // 20)
+    for pair_index, (first, second) in enumerate(pairs, start=1):
+        if progress is not None and (pair_index == 1 or pair_index % report_every == 0):
+            progress(
+                f"matched {pair_index}/{len(pairs)} pairs "
+                f"({100 * pair_index // len(pairs)}%)"
+            )
         matched = _match_rootsift_pair(
             features[first],
             features[second],
@@ -504,7 +518,27 @@ def _analyse_images(
         edges=tuple(public_edges),
         components=_components(count, public_edges),
     )
+    if progress is not None:
+        progress(
+            f"accepted {len(accepted)} overlaps; largest component has "
+            f"{len(graph.selected)} images"
+        )
     return _Analysis(graph=graph, edges=tuple(accepted), focal_px=focal)
+
+
+def _capture_order_pairs(count: int, window: int | None) -> list[tuple[int, int]]:
+    """Candidate pairs near each other in capture order, including loop closure."""
+
+    pairs = list(itertools.combinations(range(count), 2))
+    if window is None:
+        return pairs
+    if window < 1:
+        raise ValueError("pair window must be positive")
+    return [
+        (first, second)
+        for first, second in pairs
+        if min(second - first, count - (second - first)) <= window
+    ]
 
 
 def find_overlap_graph(
@@ -521,6 +555,8 @@ def find_overlap_graph(
         confidence_threshold=confidence_threshold,
         match_confidence=match_confidence,
         minimum_gradient_correlation=minimum_gradient_correlation,
+        pair_window=None,
+        progress=None,
     ).graph
 
 
@@ -668,6 +704,16 @@ def _warp_and_blend(
     warped_images: list[np.ndarray] = []
     warped_masks: list[np.ndarray] = []
     for index, rotation in zip(ids, corrected, strict=True):
+        roi = warper.warpRoi((width, height), intrinsic, rotation)
+        _, _, roi_width, roi_height = roi
+        if (
+            roi_width <= 0
+            or roi_height <= 0
+            or roi_width * roi_height > 8_000_000
+        ):
+            raise StitchError(
+                f"image {index} produced an implausible spherical warp ROI {roi}"
+            )
         corner, warped = warper.warp(
             images[index], intrinsic, rotation, cv2.INTER_LINEAR, cv2.BORDER_REFLECT
         )
@@ -682,18 +728,9 @@ def _warp_and_blend(
         warped_images.append(warped)
         warped_masks.append(mask)
 
-    compensator = cv2.detail.ExposureCompensator_createDefault(
-        cv2.detail.ExposureCompensator_GAIN_BLOCKS
-    )
-    compensator.feed(corners, warped_images, warped_masks)
-    for source in range(len(warped_images)):
-        compensator.apply(
-            source,
-            corners[source],
-            warped_images[source],
-            warped_masks[source],
-        )
-
+    # ExposureCompensator allocates over the union of every corner. Validate
+    # that union before handing it the images; otherwise a corrupt/sentinel
+    # corner can make OpenCV attempt a hundreds-of-gigabytes allocation.
     minimum_x = min(corner[0] for corner in corners)
     minimum_y = min(corner[1] for corner in corners)
     maximum_x = max(
@@ -706,8 +743,24 @@ def _warp_and_blend(
     )
     output_width = maximum_x - minimum_x
     output_height = maximum_y - minimum_y
-    if output_width * output_height > 30_000_000:
+    if (
+        output_width <= 0
+        or output_height <= 0
+        or output_width * output_height > 30_000_000
+    ):
         raise StitchError("feature camera graph produced an implausibly large canvas")
+
+    compensator = cv2.detail.ExposureCompensator_createDefault(
+        cv2.detail.ExposureCompensator_GAIN
+    )
+    compensator.feed(corners, warped_images, warped_masks)
+    for source in range(len(warped_images)):
+        compensator.apply(
+            source,
+            corners[source],
+            warped_images[source],
+            warped_masks[source],
+        )
 
     sharpness = np.array(
         [
@@ -877,6 +930,8 @@ def stitch_largest_component(
     *,
     confidence_threshold: float = 0.6,
     minimum_gradient_correlation: float = 0.2,
+    pair_window: int | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> StitchResult:
     """Recover and render the largest verified image-only camera graph."""
 
@@ -885,12 +940,18 @@ def stitch_largest_component(
         confidence_threshold=confidence_threshold,
         match_confidence=0.35,
         minimum_gradient_correlation=minimum_gradient_correlation,
+        pair_window=pair_window,
+        progress=progress,
     )
     selected = analysis.graph.selected
     if len(selected) < 2:
         raise StitchError("no pair of images has trustworthy feature overlap")
     initial, tree, root = _maximum_spanning_rotations(selected, analysis.edges)
+    if progress is not None:
+        progress("solving and refining camera rotations")
     rotations, cycle_error = _refine_rotations(initial, root, analysis.edges)
+    if progress is not None:
+        progress("warping and exposure-compensating panorama")
     panorama, alpha = _warp_and_blend(images, rotations, analysis.focal_px)
     return StitchResult(
         image=panorama,

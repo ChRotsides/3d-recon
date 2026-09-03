@@ -10,11 +10,12 @@ android {
 
     defaultConfig {
         applicationId = "com.recon.poselogger"
-        // Plan §1.1: Android 13+ with an ARCore-supported device.
+        // RGB-only Camera2 scanner; no ARCore-capable device is required.
         minSdk = 33
         targetSdk = 35
         versionCode = 1
         versionName = "0.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -23,18 +24,30 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests.isReturnDefaultValues = true }
+
+    // The historical AR prototype remains in the repository for reference,
+    // but this application variant ships only the Camera2 RGB scanner/viewer.
+    sourceSets {
+        getByName("main").java.setSrcDirs(
+            listOf("src/main/java/com/recon/poselogger/rgbscan")
+        )
+        getByName("main").res.setSrcDirs(listOf("src/rgbscan/res"))
+        getByName("main").jniLibs.setSrcDirs(emptyList<String>())
+        getByName("test").java.setSrcDirs(
+            listOf("src/test/java/com/recon/poselogger/rgbscan")
+        )
+        getByName("androidTest").java.setSrcDirs(
+            listOf("src/androidTest/java/com/recon/poselogger/rgbscan")
+        )
+    }
 }
 
 dependencies {
-    implementation("com.google.ar:core:1.49.0")
-    // UniFFI-generated bindings for the shared Rust guidance core (ADR-0001).
-    // JNA is how they reach the native library at runtime; the .so itself is
-    // produced by cargo-ndk and is not needed to compile against them.
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    testImplementation("org.json:json:20240303")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }

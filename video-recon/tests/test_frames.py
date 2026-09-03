@@ -88,3 +88,21 @@ def test_undistort_frames_returns_pinhole_and_crops(tmp_path):
     fixed = cv2.imread(str(tmp_path / "dst" / "a.jpg"))
     assert fixed.shape[:2] == (out.height, out.width)
     assert 0 < out.width <= 160 and 0 < out.height <= 120
+
+
+def test_panorama_stations_and_projection():
+    from videorecon import panorama
+
+    pos = np.array(
+        [[0, 0, 0], [0.1, 0, 0], [0.2, 0, 0.1], [3, 0, 0], [3.1, 0, 0], [3.2, 0, 0]], float
+    )
+    runs = panorama.stations(pos, radius_m=0.6, min_frames=2)
+    assert runs == [[0, 1, 2], [3, 4, 5]]
+    # One image looking down -Z (north) with a bright centre pixel lands at longitude 0, latitude 0.
+    img = np.zeros((90, 160, 3), np.uint8)
+    img[40:50, 75:85] = 255
+    pano, cover = panorama.render_equirect([img], [np.eye(3)], 100, 100, 80, 45, width=360)
+    assert pano.shape == (180, 360, 3)
+    ys, xs = np.nonzero(pano[..., 0] > 128)
+    assert abs(xs.mean() - 180) < 4 and abs(ys.mean() - 90) < 4
+    assert 0 < (cover > 0).mean() < 0.5

@@ -258,6 +258,18 @@ def drift_over_time(out_dir: Path, recording_dir: Path) -> dict:
     t_ns = timing.timestamps_ns[idx]
     r_imu = np.einsum("nij,jk->nik", track.rotation_at(t_ns), r_dc)  # cv camera -> ENU
     r_imu_gl = np.einsum("ij,njk,kl->nil", imu.ENU_TO_Y_UP, r_imu, imu.CV_TO_GL)
+    # A bundle rotated upright for the depth model has its camera axes rotated
+    # about the optical axis; rotate the sensors' camera the same way.
+    rotation = 0
+    prov = out_dir / "bundle" / "provenance.json"
+    if prov.exists():
+        rotation = int(
+            json.loads(prov.read_text())["manifest_stages"].get("bundle_rotation_deg", 0)
+        )
+    if rotation:
+        from videorecon.depth import rotate_pose
+
+        r_imu_gl = np.stack([rotate_pose(r, rotation) for r in r_imu_gl])
     r_sfm = np.asarray([k["pose"]["R"] for k in b["keyframes"]])
     rot = align.solve_rotation(r_imu_gl, r_sfm)
     res = rot.residual_deg

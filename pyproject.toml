@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 # The capture-to-cloud path only: read a bundle, run DA3, project by pose.
 dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
     "numpy>=1.26",
     "pydantic>=2.7",
     "pillow>=10.3",
@@ -52,6 +54,7 @@ tmp_path_retention_count = 1
 markers = [
     "gpu: requires a CUDA GPU with compute capability >= 7.0",
     "slow: takes more than a few seconds",
+    "real_da3: requires the pinned DA3 source and locally cached DA3-Small checkpoint",
 ]
 
 [tool.ruff]

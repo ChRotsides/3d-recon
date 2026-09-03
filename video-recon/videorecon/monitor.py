@@ -501,6 +501,7 @@ img{max-width:100%;border-radius:6px}pre{font-size:11px;white-space:pre-wrap;col
 <div class="card wide"><h2>Verified inliers to the next keyframe (red = under 15, a break in the chain)</h2><svg id="chain" preserveAspectRatio="none" viewBox="0 0 1000 120"></svg><div class="muted" id="chainstats"></div></div>
 <div class="card"><h2>Match matrix: keyframe × keyframe, verified inliers (live)</h2><div class="muted" id="matrixinfo"></div><img id="matrix" style="image-rendering:pixelated"><div class="muted">bright = many inliers · dark purple = under 15 (rejected) · black = not matched. The diagonal band is the video order; blocks away from it are loop closures.</div></div>
 <div class="card"><h2>Most recently verified pair (live)</h2><label><input type="checkbox" id="livepair" checked> follow</label> <span class="muted" id="pairinfo"></span><img id="livepairimg"></div>
+<div class="card wide"><h2>Panorama by station (keyframes projected by their pose onto a sphere)</h2><div class="muted" id="panoinfo">waiting for poses…</div><div id="panosel"></div><img id="panoimg" style="width:100%"></div>
 <div class="card wide"><h2>Sparse model: points and camera path (red)</h2><div class="muted" id="sparseinfo">waiting for COLMAP…</div><iframe id="sparseview" src="about:blank" style="width:100%;height:520px;border:0;border-radius:6px;background:#000"></iframe></div>
 <div class="card wide"><h2>Dense cloud as it is fused</h2><div class="muted" id="cloudinfo">waiting for fusion…</div><iframe id="cloudview" src="about:blank" style="width:100%;height:520px;border:0;border-radius:6px;background:#000"></iframe></div>
 <div class="card wide"><h2>Sensor alignment &amp; scale</h2><pre id="align">–</pre></div>
@@ -545,7 +546,13 @@ let lastPair=null,lastMatrix=0;
 function matching(){if(S.pairs_total!=null){document.getElementById('matrixinfo').textContent=`${S.verified_pairs??0} of ${S.pairs_total} pairs matched · ${S.strong_pairs??0} with ≥15 inliers`;
   if(Date.now()-lastMatrix>6000&&(S.new_pairs_since_last_poll||!lastMatrix)){lastMatrix=Date.now();document.getElementById('matrix').src='/matrix.png?t='+lastMatrix;}}
  const p=S.latest_pair;if(p&&document.getElementById('livepair').checked&&(''+p)!==(''+lastPair)){lastPair=p;document.getElementById('livepairimg').src=`/matches/${p[0]}/${p[1]}?t=${Date.now()}`;document.getElementById('pairinfo').textContent=`keyframes ${p[0]} ↔ ${p[1]}`;}}
-const _tick=tick;tick=async function(){await _tick();viewers();matching();};
+let panoBuilt=false;
+async function panos(){if(panoBuilt)return;let s;try{s=await(await fetch('/panoramas')).json();}catch(e){return;}
+ if(!s.ready){document.getElementById('panoinfo').textContent=s.error?('panoramas: '+s.error):(s.state==='running'?'rendering panoramas per station…':'waiting for poses…');return;}
+ panoBuilt=true;const sel=document.createElement('select');s.stations.forEach(st=>{const o=document.createElement('option');o.value=st.file;o.textContent=`station ${st.index}: keyframes ${st.frames[0]}–${st.frames[1]} (${st.keyframes} frames) at (${st.centre.join(', ')}) m`;sel.appendChild(o);});
+ sel.onchange=()=>{document.getElementById('panoimg').src='/out/'+sel.value+'?t='+Date.now();};document.getElementById('panosel').appendChild(sel);if(s.stations.length){sel.onchange();}
+ document.getElementById('panoinfo').textContent=`${s.stations.length} stations · longitude 0 is north when the magnetometer was trusted · seams show pose error and parallax`;}
+const _tick=tick;tick=async function(){await _tick();viewers();matching();panos();};
 tick();setInterval(tick,3000);
 </script></body></html>"""
 
@@ -577,7 +584,11 @@ def create_app(root: Path, log_path: Path | None = None, recording: Path | None 
     def matrix() -> Response:
         return Response(_matrix_png(root), media_type="image/png")
 
-    from videorecon import walk
+    from videorecon import panorama, walk
+
+    @app.get("/panoramas")
+    def panoramas() -> JSONResponse:
+        return JSONResponse(panorama.status(root))
 
     @app.get("/walk", response_class=HTMLResponse)
     def walk_page() -> str:

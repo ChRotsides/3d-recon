@@ -20,7 +20,7 @@ sys.path.insert(0, str(HERE.parent.parent / "harness"))
 from videorecon.pipeline import Options, reconstruct  # noqa: E402
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -56,17 +56,27 @@ def main() -> None:
     p.add_argument("--no-fusion", action="store_true", help="predict depth but do not fuse")
     p.add_argument("--no-magnetic-heading", action="store_true")
     p.add_argument(
-        "--camera-height", type=float, default=1.5, help="metres the phone was held above the floor"
+        "--camera-height", type=float, default=1.3, help="metres the phone was held above the floor"
     )
     p.add_argument("--scale-source", choices=("auto", "imu", "floor"), default="auto")
     p.add_argument("--force", action="store_true")
-    a = p.parse_args()
-    opts = Options(
+    return p
+
+
+def main() -> None:
+    a = build_parser().parse_args()
+    reconstruct(a.recording, a.out, options_from_args(a))
+
+
+def options_from_args(a) -> Options:
+    """Every CLI flag lands in Options here; a flag parsed but not passed is a silent no-op."""
+    return Options(
         orientation_sensor=a.orientation_sensor,
         min_rotation_deg=a.min_rotation,
         max_interval_s=a.max_interval,
         max_long_edge=a.max_long_edge,
         max_keyframes=a.max_keyframes,
+        exhaustive_below=a.exhaustive_below,
         depth_variant=a.variant,
         run_depth=not a.no_depth,
         run_fusion=not a.no_fusion,
@@ -74,8 +84,9 @@ def main() -> None:
         depth_trunc_m=a.depth_trunc,
         force=a.force,
         use_magnetic_heading=not a.no_magnetic_heading,
+        camera_height_m=a.camera_height,
+        scale_source=a.scale_source,
     )
-    reconstruct(a.recording, a.out, opts)
 
 
 if __name__ == "__main__":

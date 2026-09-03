@@ -75,3 +75,57 @@ def test_recording_refuses_unknown_clock(tmp_path):
     _write_recording(root, timestamp_source="UNKNOWN")
     with pytest.raises(ValueError):
         Recording.load(root)
+
+
+def test_every_cli_flag_reaches_options():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "reconstruct.py"
+    spec = importlib.util.spec_from_file_location("reconstruct_cli", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    a = mod.build_parser().parse_args(
+        [
+            "rec",
+            "out",
+            "--camera-height",
+            "1.3",
+            "--scale-source",
+            "floor",
+            "--variant",
+            "small",
+            "--exhaustive-below",
+            "99",
+            "--min-rotation",
+            "5",
+            "--no-depth",
+        ]
+    )
+    o = mod.options_from_args(a)
+    assert o.camera_height_m == 1.3 and o.scale_source == "floor" and o.depth_variant == "small"
+    assert o.exhaustive_below == 99 and o.min_rotation_deg == 5 and o.run_depth is False
+    # Every parsed flag except the positionals maps to an Options field or a run switch.
+    dests = {
+        act.dest
+        for act in mod.build_parser()._actions
+        if act.dest not in ("help", "recording", "out")
+    }
+    covered = {
+        "orientation_sensor",
+        "min_rotation",
+        "max_interval",
+        "max_long_edge",
+        "max_keyframes",
+        "exhaustive_below",
+        "variant",
+        "no_depth",
+        "no_fusion",
+        "voxel",
+        "depth_trunc",
+        "force",
+        "no_magnetic_heading",
+        "camera_height",
+        "scale_source",
+    }
+    assert dests == covered, dests ^ covered

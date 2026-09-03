@@ -35,7 +35,7 @@ class Options:
     #: Trust the magnetometer track for absolute heading (north = -Z in the output).
     use_magnetic_heading: bool = True
     #: Height the phone was held at, for the floor-based scale (metres).
-    camera_height_m: float = 1.5
+    camera_height_m: float = 1.3
     #: "auto": IMU when its spread is small, else floor. Or force "imu" / "floor".
     scale_source: str = "auto"
     #: Rotate keyframes upright (by the sensor orientation) before the depth model.

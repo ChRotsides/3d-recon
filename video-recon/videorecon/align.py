@@ -77,7 +77,8 @@ class ScaleEstimate:
 MAX_SCALE_DISPERSION = 0.35
 
 #: Where a person holds a phone while filming a room, metres above the floor.
-DEFAULT_CAMERA_HEIGHT_M = 1.5
+#: Measured: a 177 cm person at chest height is 1.30 m.
+DEFAULT_CAMERA_HEIGHT_M = 1.3
 
 
 def scale_from_floor(

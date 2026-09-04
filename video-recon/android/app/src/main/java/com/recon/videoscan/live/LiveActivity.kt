@@ -85,6 +85,8 @@ class LiveActivity : AppCompatActivity(), SensorEventListener {
             MotionEvent.ACTION_DOWN -> { lx = e.x; ly = e.y }
             MotionEvent.ACTION_MOVE -> { if (e.pointerCount == 1) { orbitRenderer.yaw += (e.x - lx) * 0.01f; orbitRenderer.pitch = (orbitRenderer.pitch + (e.y - ly) * 0.01f).coerceIn(-1.4f, 1.5f) } ; lx = e.x; ly = e.y } }; true }
         findViewById<Button>(com.recon.videoscan.R.id.reset).setOnClickListener { resetMap() }
+        findViewById<Button>(com.recon.videoscan.R.id.model).setOnClickListener { val dr = depth ?: return@setOnClickListener
+            modelIndex = (modelIndex + 1) % dr.available.size; depthHandler.post { val ms = dr.select(modelIndex); ui.post { (it as Button).text = "model: ${dr.name.take(18)} ($ms ms)"; fitA = 0f; scaleUsed = 0f; resetMap() } } }
         findViewById<Button>(com.recon.videoscan.R.id.fuse).setOnClickListener { fusion = !fusion; (it as Button).text = if (fusion) "fusion: on" else "fusion: off"; resetMap() }
         sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val files = getExternalFilesDir(null)!!
@@ -92,7 +94,7 @@ class LiveActivity : AppCompatActivity(), SensorEventListener {
         if (!cfg.exists()) copyAssets(files)
         handle = Native.init(cfg.absolutePath)
         val model = File(files, "models")
-        depthHandler.post { try { depth = DepthRunner(model) } catch (e: Throwable) { Log.e("livescan", "depth model: $e"); ui.post { status.text = "depth model failed: $e" } } }
+        depthHandler.post { try { depth = DepthRunner(model); ui.post { findViewById<Button>(com.recon.videoscan.R.id.model).text = "model: ${depth?.name?.take(18)}" } } catch (e: Throwable) { Log.e("livescan", "depth model: $e"); ui.post { status.text = "depth model failed: $e" } } }
     }
 
     private fun copyAssets(files: File) {
@@ -159,7 +161,7 @@ class LiveActivity : AppCompatActivity(), SensorEventListener {
         val yp = img.planes[0]; val yb = yp.buffer; val gray = ByteArray(w * h)
         if (yp.rowStride == w) { yb.position(0); yb.get(gray, 0, w * h) } else for (r in 0 until h) { yb.position(r * yp.rowStride); yb.get(gray, r * w, w) }
         // RGBA at the depth model's resolution (322x182) from the YUV planes, nearest neighbour
-        val dw = 168; val dh = 98; val rgba = ByteArray(dw * dh * 4)
+        val dw = 322; val dh = 182; val rgba = ByteArray(dw * dh * 4)
         val up = img.planes[1]; val vp = img.planes[2]; val ub = up.buffer; val vb = vp.buffer; val cs = up.pixelStride; val crs = up.rowStride
         for (y in 0 until dh) { val sy = y * h / dh; val suy = sy / 2
             for (x in 0 until dw) { val sx = x * w / dw; val Y = gray[sy * w + sx].toInt() and 0xff; val ci = suy * crs + (sx / 2) * cs
@@ -187,16 +189,18 @@ class LiveActivity : AppCompatActivity(), SensorEventListener {
         val lp = lastDepthPose; val moved = lp == null || dist(lp, pose) > 0.10f || quatAngle(lp, pose) > 0.087f || fd.t - lastDepthAt > 0.7
         if (moved && depth != null && depthBusy.compareAndSet(false, true)) { lastDepthAt = fd.t; lastDepthPose = pose.copyOf(); val lm = landmarks.copyOf(landmarkCount * 3); depthHandler.post { runDepth(fd, pose.copyOf(), lm) } }
     }
-    private var orbitTargetSet = false
+    private var orbitTargetSet = false; private var modelIndex = 0
     private fun dist(a: FloatArray, b: FloatArray) = sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
     private fun quatAngle(a: FloatArray, b: FloatArray): Float { val d = abs(a[3] * b[3] + a[4] * b[4] + a[5] * b[5] + a[6] * b[6]).coerceAtMost(1f); return 2f * kotlin.math.acos(d) }
 
     private fun runDepth(fd: FrameData, pose: FloatArray, lm: FloatArray) {
         try {
             val dr = depth ?: return
-            val (rel, ms) = dr.run(fd.rgba); depthMs = ms
+            val fxS = 1278.4f * fd.rw / 1920f; val fyS = 1278.6f * fd.rw / 1920f; val cxS = 962.1f * fd.rw / 1920f; val cyS = 536.9f * fd.rh / 1080f
+            val (relFull, ms) = dr.run(fd.rgba, fd.rw, fd.rh, floatArrayOf(fxS, fyS, cxS, cyS)); depthMs = ms
+            val mw = dr.w; val mh = dr.h
             // intrinsics at the depth resolution: factory calibration is for 1920 px wide frames (see recording meta)
-            val fx = 1278.4f * fd.rw / 1920f; val fy = 1278.6f * fd.rw / 1920f; val cx = 962.1f * fd.rw / 1920f; val cy = 536.9f * fd.rh / 1080f
+            val fx = 1278.4f * mw / 1920f; val fy = 1278.6f * mw / 1920f; val cx = 962.1f * mw / 1920f; val cy = 536.9f * mh / 1080f; val rel = relFull
             // world<-camera rotation: pose quaternion is R_gl (camera looks -Z); OpenCV axes = R_gl * diag(1,-1,-1)
             val q = pose; val r = quatToRot(q[3], q[4], q[5], q[6]); val rcv = floatArrayOf(r[0], -r[1], -r[2], r[3], -r[4], -r[5], r[6], -r[7], -r[8])
             // scale the relative depth with the VIO landmarks that project into this frame (median ratio)
@@ -205,11 +209,15 @@ class LiveActivity : AppCompatActivity(), SensorEventListener {
                 val zc = rcv[2] * px + rcv[5] * py + rcv[8] * pz
                 if (zc > 0.2f && zc < 8f) { val xc = rcv[0] * px + rcv[3] * py + rcv[6] * pz; val yc = rcv[1] * px + rcv[4] * py + rcv[7] * pz
                     val u = (fx * xc / zc + cx).toInt(); val v = (fy * yc / zc + cy).toInt()
-                    if (u in 0 until fd.rw && v in 0 until fd.rh) { val d = rel[v * fd.rw + u]; if (d > 1e-4f) { zs.add(zc); ds.add(d) } } }
+                    if (u in 0 until mw && v in 0 until mh) { val d = rel[v * mw + u]; if (d > 1e-4f) { zs.add(zc); ds.add(d) } } }
                 i += 3 }
             landmarksUsed = zs.size
             val mm: ShortArray
-            if (dr.inverse) {
+            if (dr.kind == DepthRunner.Kind.METRIC_CANONICAL || dr.kind == DepthRunner.Kind.METRIC_K) {
+                // metric model: use its depth directly; the landmark ratio is only reported as a check
+                if (zs.size >= 3) { val ratios = FloatArray(zs.size) { k -> zs[k] / ds[k] }; ratios.sort(); scaleUsed = ratios[ratios.size / 2] }
+                mm = ShortArray(rel.size) { k -> (rel[k] * 1000f).toInt().coerceIn(0, 65535).toShort() }
+            } else if (dr.kind == DepthRunner.Kind.RELATIVE_INVERSE) {
                 // relative inverse depth: 1/z = a*d + b, least squares over the landmarks, kept from the last good fit
                 if (zs.size >= 4) { var sd = 0.0; var sy = 0.0; var sdd = 0.0; var sdy = 0.0; val n = zs.size
                     for (k in 0 until n) { val d = ds[k].toDouble(); val y = 1.0 / zs[k]; sd += d; sy += y; sdd += d * d; sdy += d * y }
@@ -222,15 +230,15 @@ class LiveActivity : AppCompatActivity(), SensorEventListener {
                 mm = ShortArray(rel.size) { k -> (rel[k] * scaleUsed * 1000f).toInt().coerceIn(0, 65535).toShort() }
             }
             if (fusion) {
-                tsdfStats = Native.tsdfIntegrate(handle, mm, fd.rw, fd.rh, floatArrayOf(fx, fy, cx, cy), rcv, floatArrayOf(q[0], q[1], q[2]), fd.rgba, fd.rw, fd.rh, 2)
+                tsdfStats = Native.tsdfIntegrate(handle, mm, mw, mh, floatArrayOf(fx, fy, cx, cy), rcv, floatArrayOf(q[0], q[1], q[2]), fd.rgba, fd.rw, fd.rh, if (mw >= 300) 2 else 1)
                 val surf = Native.tsdfSurface(handle, 1_500_000); publish(surf)
             } else {
                 // raw back-projection of this frame appended to the cloud (comparison mode)
                 val pts = ArrayList<Float>(); var y = 1
-                while (y < fd.rh) { var x = 1; while (x < fd.rw) { val z = mm[y * fd.rw + x].toInt() and 0xffff; if (z in 1..6000) { val zf = z / 1000f
+                while (y < mh) { var x = 1; while (x < mw) { val z = mm[y * mw + x].toInt() and 0xffff; if (z in 1..6000) { val zf = z / 1000f
                     val X = (x - cx) / fx * zf; val Y = (y - cy) / fy * zf
                     pts.add(q[0] + rcv[0] * X + rcv[1] * Y + rcv[2] * zf); pts.add(q[1] + rcv[3] * X + rcv[4] * Y + rcv[5] * zf); pts.add(q[2] + rcv[6] * X + rcv[7] * Y + rcv[8] * zf)
-                    val o = (y * fd.rw + x) * 4; pts.add((fd.rgba[o].toInt() and 0xff) / 255f); pts.add((fd.rgba[o + 1].toInt() and 0xff) / 255f); pts.add((fd.rgba[o + 2].toInt() and 0xff) / 255f) }; x += 3 }; y += 3 }
+                    val o = ((y * fd.rh / mh) * fd.rw + (x * fd.rw / mw)) * 4; pts.add((fd.rgba[o].toInt() and 0xff) / 255f); pts.add((fd.rgba[o + 1].toInt() and 0xff) / 255f); pts.add((fd.rgba[o + 2].toInt() and 0xff) / 255f) }; x += 3 }; y += 3 }
                 rawCloud.addAll(pts); publish(rawCloud.toFloatArray())
             }
             depthFrames++

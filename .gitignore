@@ -50,3 +50,6 @@ core/bindings/
 archive/
 .playwright-mcp/
 .env
+
+# Standalone repository with its own history
+livepose/

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-
 from recon.live_rgb.incremental import classify_frame_quality
 
 
@@ -18,8 +17,9 @@ def test_blur_exposure_and_textureless_reasons_are_separate():
 
 
 def test_parallax_reason_threshold_is_a_named_channel(tmp_path, textured_images):
-    from .conftest import make_station
     from recon.live_rgb.incremental import IncrementalGraphEngine
+
+    from .conftest import make_station
 
     station = make_station(tmp_path, textured_images[:1])
     guidance = IncrementalGraphEngine(tmp_path).process_station(station)

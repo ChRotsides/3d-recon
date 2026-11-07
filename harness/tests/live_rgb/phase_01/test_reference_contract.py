@@ -3,6 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+# These check a real capture's outputs, which live in out/ and are not in the repository.
+pytestmark = pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[4] / "out/capture-065a").exists(),
+    reason="needs the local out/capture-065a reference outputs",
+)
+
 
 def test_established_reference_metrics_are_present() -> None:
     root = Path(__file__).resolve().parents[4]

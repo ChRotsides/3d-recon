@@ -85,6 +85,7 @@ def _da3_depth(
     import sys
 
     import torch
+
     from recon.depth.da3 import _install_full_precision_forward, _usable_device
     from recon.torch_compat import (
         compatible_dtype,

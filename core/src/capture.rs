@@ -150,7 +150,10 @@ impl CaptureStats {
     }
 
     pub fn captured_sectors(&self) -> usize {
-        self.sectors.iter().filter(|s| **s == SectorState::Captured).count()
+        self.sectors
+            .iter()
+            .filter(|s| **s == SectorState::Captured)
+            .count()
     }
 
     /// Sectors that were tried and yielded nothing usable, plus ones the user

@@ -294,21 +294,36 @@ pub enum MarkRejection {
     NoFloor,
     /// The aim ray never descends to the floor.
     NotLookingDown,
-    TooFar { distance_m: f32, limit_m: f32 },
+    TooFar {
+        distance_m: f32,
+        limit_m: f32,
+    },
     /// Indistinguishable from the previous mark: one press registered twice.
-    TooClose { spacing_m: f32 },
+    TooClose {
+        spacing_m: f32,
+    },
     /// Depth at the reticle says the reticle is not on the floor.
-    NotFloor { depth_m: f32, expected_m: f32 },
+    NotFloor {
+        depth_m: f32,
+        expected_m: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MarkOutcome {
-    Accepted { index: usize, position: Point2, sigma_m: f32, quality: MarkQuality },
+    Accepted {
+        index: usize,
+        position: Point2,
+        sigma_m: f32,
+        quality: MarkQuality,
+    },
     /// The mark landed on the first corner: the walk is a closed loop, and the
     /// gap between the two is measured drift. Carries the gap *before* it is
     /// distributed, because that number is the plan's error bar and must not be
     /// quietly absorbed by the correction that follows.
-    ClosedLoop { drift_m: f32 },
+    ClosedLoop {
+        drift_m: f32,
+    },
     Rejected(MarkRejection),
 }
 
@@ -324,7 +339,13 @@ pub struct FloorPlan {
 
 impl FloorPlan {
     pub fn new(params: FloorPlanParams) -> Self {
-        FloorPlan { params, floor_y: None, marks: Vec::new(), closed: false, drift_m: None }
+        FloorPlan {
+            params,
+            floor_y: None,
+            marks: Vec::new(),
+            closed: false,
+            drift_m: None,
+        }
     }
 
     pub fn params(&self) -> FloorPlanParams {
@@ -346,7 +367,10 @@ impl FloorPlan {
     }
 
     pub fn corner_count(&self) -> usize {
-        self.marks.iter().filter(|m| m.kind == MarkKind::Corner).count()
+        self.marks
+            .iter()
+            .filter(|m| m.kind == MarkKind::Corner)
+            .count()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -472,7 +496,12 @@ impl FloorPlan {
     /// walked path is sampled only at the marks, so it under-measures the true
     /// route, but only the ratios enter the correction.
     fn close_loop(&mut self, remark: Point2, remark_from: Vec3) {
-        let Some(first) = self.marks.iter().find(|m| m.kind == MarkKind::Corner).copied() else {
+        let Some(first) = self
+            .marks
+            .iter()
+            .find(|m| m.kind == MarkKind::Corner)
+            .copied()
+        else {
             return;
         };
         let gap = (remark.0 - first.position.0, remark.1 - first.position.1);
@@ -595,7 +624,11 @@ impl FloorPlan {
             } else {
                 None
             };
-            let fallback = if marked.inferred { None } else { Some(marked.position) };
+            let fallback = if marked.inferred {
+                None
+            } else {
+                Some(marked.position)
+            };
             // A blocked corner whose walls could not be fitted, or came out
             // parallel, resolves to nothing. Dropping it silently would shrink
             // the room by a whole corner and still return a plausible polygon,
@@ -655,8 +688,9 @@ impl Footprint {
             points.reverse();
         }
         let n = points.len();
-        let wall_lengths_m: Vec<f32> =
-            (0..n).map(|i| distance2(points[i], points[(i + 1) % n])).collect();
+        let wall_lengths_m: Vec<f32> = (0..n)
+            .map(|i| distance2(points[i], points[(i + 1) % n]))
+            .collect();
         Footprint {
             area_m2: signed.abs(),
             perimeter_m: wall_lengths_m.iter().sum(),
@@ -747,7 +781,10 @@ fn fit_line(marks: &[Mark]) -> Option<Line2> {
         return None; // every point on top of every other
     }
     let theta = 0.5 * (2.0 * sxz).atan2(sxx - szz);
-    Some(Line2 { point: (mx, mz), direction: (theta.cos(), theta.sin()) })
+    Some(Line2 {
+        point: (mx, mz),
+        direction: (theta.cos(), theta.sin()),
+    })
 }
 
 /// Intersect two infinite lines, or `None` if they are within ~1.7 degrees of
@@ -815,9 +852,7 @@ fn is_self_intersecting(points: &[Point2]) -> bool {
 }
 
 fn segments_cross(p1: Point2, p2: Point2, p3: Point2, p4: Point2) -> bool {
-    let d = |a: Point2, b: Point2, c: Point2| {
-        (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
-    };
+    let d = |a: Point2, b: Point2, c: Point2| (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
     let (d1, d2, d3, d4) = (d(p3, p4, p1), d(p3, p4, p2), d(p1, p2, p3), d(p1, p2, p4));
     ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0))
 }
@@ -831,7 +866,10 @@ mod tests {
 
     /// A camera at `(x, EYE, z)` aiming at yaw/pitch, floor at y = 0.
     fn aim(x: f32, z: f32, yaw: f32, pitch: f32) -> Pose {
-        Pose { r: look_rotation(yaw, pitch), t: Vec3::new(x, EYE, z) }
+        Pose {
+            r: look_rotation(yaw, pitch),
+            t: Vec3::new(x, EYE, z),
+        }
     }
 
     /// A camera standing at `from` and aiming exactly at the floor point
@@ -843,7 +881,10 @@ mod tests {
         // (-sin y * cos p, ...), i.e. yaw 0 looks down -Z.
         let yaw = (-dx).atan2(-dz);
         let pitch = (-EYE).atan2(d);
-        Pose { r: look_rotation(yaw, pitch), t: Vec3::new(from.0, EYE, from.1) }
+        Pose {
+            r: look_rotation(yaw, pitch),
+            t: Vec3::new(from.0, EYE, from.1),
+        }
     }
 
     fn plan() -> FloorPlan {
@@ -904,10 +945,15 @@ mod tests {
         // advertise 1.2 cm at 1 m, which is three times better than the truth.
         let params = FloorPlanParams::default();
         let sigma = |target: Point2| {
-            floor_hit(&aim_at((0.0, 0.0), target), 0.0, params).unwrap().sigma_m
+            floor_hit(&aim_at((0.0, 0.0), target), 0.0, params)
+                .unwrap()
+                .sigma_m
         };
         let (near, mid, far) = (sigma((1.0, 0.0)), sigma((2.0, 0.0)), sigma((4.0, 0.0)));
-        assert!(far / near > 4.0, "quadrupling the distance did more than quadruple the error");
+        assert!(
+            far / near > 4.0,
+            "quadrupling the distance did more than quadruple the error"
+        );
         assert!(far / mid > 2.5, "{mid} -> {far}");
         // The absolute numbers are the ones the module docs table quotes, and
         // the docs are the argument for the range limit.
@@ -928,12 +974,19 @@ mod tests {
         let held = floor_hit_burst(&burst, 0.0, params).unwrap();
 
         assert!(one.sigma_m > 0.14, "single frame at 3 m: {}", one.sigma_m);
-        assert!(held.sigma_m < 0.06, "12-frame hold at 3 m: {}", held.sigma_m);
+        assert!(
+            held.sigma_m < 0.06,
+            "12-frame hold at 3 m: {}",
+            held.sigma_m
+        );
         // Not sqrt(12) better overall: the floor-height term is one estimate
         // shared by every frame in the burst and cannot average away. If this
         // ever reaches sqrt(12) the systematic term has been divided too.
         let ratio = one.sigma_m / held.sigma_m;
-        assert!(ratio < 12f32.sqrt(), "claimed {ratio}x from averaging, which is too good");
+        assert!(
+            ratio < 12f32.sqrt(),
+            "claimed {ratio}x from averaging, which is too good"
+        );
         assert!(ratio > 2.0, "only {ratio}x from a 12-frame hold");
     }
 
@@ -971,7 +1024,10 @@ mod tests {
         let mut p = plan();
         let outcome = p.mark(MarkKind::Corner, &[aim_at((0.0, 0.0), (5.0, 0.0))], None);
         match outcome {
-            MarkOutcome::Rejected(MarkRejection::TooFar { distance_m, limit_m }) => {
+            MarkOutcome::Rejected(MarkRejection::TooFar {
+                distance_m,
+                limit_m,
+            }) => {
                 assert!((distance_m - 5.0).abs() < 0.05);
                 assert_eq!(limit_m, 3.0);
             }
@@ -1038,7 +1094,10 @@ mod tests {
         for (c, i) in corners.iter().zip(inset) {
             let from = (c.0 + i.0, c.1 + i.1);
             let outcome = p.mark(MarkKind::Corner, &[aim_at(from, *c)], None);
-            assert!(matches!(outcome, MarkOutcome::Accepted { .. }), "{outcome:?}");
+            assert!(
+                matches!(outcome, MarkOutcome::Accepted { .. }),
+                "{outcome:?}"
+            );
         }
     }
 
@@ -1049,10 +1108,17 @@ mod tests {
         let f = p.solve().expect("four corners are a polygon");
         assert_eq!(f.points.len(), 4);
         assert!((f.area_m2 - 12.0).abs() < 0.01, "area {}", f.area_m2);
-        assert!((f.perimeter_m - 14.0).abs() < 0.01, "perimeter {}", f.perimeter_m);
+        assert!(
+            (f.perimeter_m - 14.0).abs() < 0.01,
+            "perimeter {}",
+            f.perimeter_m
+        );
         let mut walls = f.wall_lengths_m.clone();
         walls.sort_by(f32::total_cmp);
-        assert!((walls[0] - 3.0).abs() < 0.01 && (walls[3] - 4.0).abs() < 0.01, "{walls:?}");
+        assert!(
+            (walls[0] - 3.0).abs() < 0.01 && (walls[3] - 4.0).abs() < 0.01,
+            "{walls:?}"
+        );
         assert!(!f.self_intersecting);
     }
 
@@ -1076,7 +1142,11 @@ mod tests {
         let corners = [(0.0, 0.0), (0.0, 3.0), (4.0, 3.0), (4.0, 0.0)];
         let inset = [(0.7, 0.7), (0.7, -0.7), (-0.7, -0.7), (-0.7, 0.7)];
         for (c, i) in corners.iter().zip(inset) {
-            widdershins.mark(MarkKind::Corner, &[aim_at((c.0 + i.0, c.1 + i.1), *c)], None);
+            widdershins.mark(
+                MarkKind::Corner,
+                &[aim_at((c.0 + i.0, c.1 + i.1), *c)],
+                None,
+            );
         }
         let b = widdershins.solve().unwrap();
 
@@ -1094,7 +1164,11 @@ mod tests {
         let corners = [(0.0, 0.0), (4.0, 0.0), (0.0, 3.0), (4.0, 3.0)];
         let inset = [(0.7, 0.7), (-0.7, 0.7), (0.7, -0.7), (-0.7, -0.7)];
         for (c, i) in corners.iter().zip(inset) {
-            p.mark(MarkKind::Corner, &[aim_at((c.0 + i.0, c.1 + i.1), *c)], None);
+            p.mark(
+                MarkKind::Corner,
+                &[aim_at((c.0 + i.0, c.1 + i.1), *c)],
+                None,
+            );
         }
         assert!(p.solve().unwrap().self_intersecting);
     }
@@ -1105,7 +1179,14 @@ mod tests {
         // would report the missing quadrant as part of the room and send the
         // user to stand in the neighbouring flat.
         let mut p = plan();
-        let corners = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (2.0, 2.0), (2.0, 4.0), (0.0, 4.0)];
+        let corners = [
+            (0.0, 0.0),
+            (4.0, 0.0),
+            (4.0, 2.0),
+            (2.0, 2.0),
+            (2.0, 4.0),
+            (0.0, 4.0),
+        ];
         for c in corners {
             // Stand a metre inside the room from each corner, roughly.
             let from = (
@@ -1113,7 +1194,10 @@ mod tests {
                 c.1 + if c.1 > 2.0 { -0.8 } else { 0.8 },
             );
             let outcome = p.mark(MarkKind::Corner, &[aim_at(from, c)], None);
-            assert!(matches!(outcome, MarkOutcome::Accepted { .. }), "{c:?}: {outcome:?}");
+            assert!(
+                matches!(outcome, MarkOutcome::Accepted { .. }),
+                "{c:?}: {outcome:?}"
+            );
         }
         let f = p.solve().unwrap();
         assert!(!f.self_intersecting);
@@ -1121,7 +1205,10 @@ mod tests {
         assert!(f.contains((1.0, 1.0)));
         assert!(f.contains((3.0, 1.0)));
         assert!(f.contains((1.0, 3.0)));
-        assert!(!f.contains((3.0, 3.0)), "the missing arm of the L is not the room");
+        assert!(
+            !f.contains((3.0, 3.0)),
+            "the missing arm of the L is not the room"
+        );
         assert!(!f.contains((5.0, 1.0)));
     }
 
@@ -1144,7 +1231,11 @@ mod tests {
         for (k, (c, i)) in corners.iter().zip(inset).enumerate() {
             let creep = 0.03 * k as f32;
             let target = (c.0 + creep, c.1);
-            p.mark(MarkKind::Corner, &[aim_at((c.0 + i.0 + creep, c.1 + i.1), target)], None);
+            p.mark(
+                MarkKind::Corner,
+                &[aim_at((c.0 + i.0 + creep, c.1 + i.1), target)],
+                None,
+            );
         }
         // Back to the first corner, which now reads 12 cm off.
         let outcome = p.mark(MarkKind::Corner, &[aim_at((0.82, 0.7), (0.12, 0.0))], None);
@@ -1154,14 +1245,21 @@ mod tests {
         };
         assert!((drift - 0.12).abs() < 0.02, "drift {drift}");
         assert!(p.is_closed());
-        assert_eq!(p.corner_count(), 4, "the re-mark is a measurement, not a fifth corner");
+        assert_eq!(
+            p.corner_count(),
+            4,
+            "the re-mark is a measurement, not a fifth corner"
+        );
 
         let f = p.solve().unwrap();
         assert_eq!(f.drift_m.map(|d| (d * 100.0).round()), Some(12.0));
         // The correction pulls the far corners back, so the room is its true
         // 4 m rather than the 4.12 m the drifting walk measured.
         let widest = f.points.iter().map(|p| p.0).fold(f32::MIN, f32::max);
-        assert!(widest < 4.05, "drift was not distributed: widest x {widest}");
+        assert!(
+            widest < 4.05,
+            "drift was not distributed: widest x {widest}"
+        );
     }
 
     #[test]
@@ -1255,7 +1353,10 @@ mod tests {
         p.mark(MarkKind::Corner, &[aim_at((0.7, 0.7), (0.0, 0.0))], None);
         assert!(p.is_closed());
         p.undo();
-        assert!(!p.is_closed(), "undoing past the closing mark reopens the walk");
+        assert!(
+            !p.is_closed(),
+            "undoing past the closing mark reopens the walk"
+        );
         assert_eq!(p.drift_m(), None);
     }
 
@@ -1279,7 +1380,10 @@ mod tests {
         // an upper storey has a floor at 3.2 m and the arithmetic must not care.
         let mut p = FloorPlan::new(FloorPlanParams::default());
         p.set_floor_height(3.2);
-        let pose = Pose { r: look_rotation(0.0, (-EYE).atan2(1.0)), t: Vec3::new(0.0, 3.2 + EYE, 0.0) };
+        let pose = Pose {
+            r: look_rotation(0.0, (-EYE).atan2(1.0)),
+            t: Vec3::new(0.0, 3.2 + EYE, 0.0),
+        };
         let hit = p.preview(&pose).expect("the floor is below the camera");
         assert!((hit.distance_m - 1.0).abs() < 1e-3, "{}", hit.distance_m);
     }
@@ -1299,9 +1403,16 @@ mod tests {
     fn fitting_a_line_needs_two_distinct_points() {
         assert!(fit_line(&[at((1.0, 1.0), 0.02)]).is_none());
         assert!(fit_line(&[at((1.0, 1.0), 0.02), at((1.0, 1.0), 0.02)]).is_none());
-        let l = fit_line(&[at((0.0, 0.0), 0.02), at((1.0, 0.0), 0.02), at((2.0, 0.0), 0.02)])
-            .unwrap();
-        assert!(l.direction.1.abs() < 1e-5, "a wall along x should point along x");
+        let l = fit_line(&[
+            at((0.0, 0.0), 0.02),
+            at((1.0, 0.0), 0.02),
+            at((2.0, 0.0), 0.02),
+        ])
+        .unwrap();
+        assert!(
+            l.direction.1.abs() < 1e-5,
+            "a wall along x should point along x"
+        );
     }
 
     #[test]
@@ -1310,8 +1421,11 @@ mod tests {
         // the centroid moves 3.3 cm and the line tilts; weighted by 1/sigma^2
         // the far mark carries a hundredth of the weight.
         let good = [at((0.0, 0.0), 0.02), at((2.0, 0.0), 0.02)];
-        let with_far =
-            [at((0.0, 0.0), 0.02), at((2.0, 0.0), 0.02), at((4.0, 0.10), 0.20)];
+        let with_far = [
+            at((0.0, 0.0), 0.02),
+            at((2.0, 0.0), 0.02),
+            at((4.0, 0.10), 0.20),
+        ];
         let a = fit_line(&good).unwrap();
         let b = fit_line(&with_far).unwrap();
         let tilt = (a.direction.1 - b.direction.1).abs();
@@ -1321,10 +1435,19 @@ mod tests {
 
     #[test]
     fn near_parallel_walls_do_not_produce_a_corner_on_the_horizon() {
-        let a = Line2 { point: (0.0, 0.0), direction: (1.0, 0.0) };
-        let b = Line2 { point: (0.0, 1.0), direction: (1.0, 0.001) };
+        let a = Line2 {
+            point: (0.0, 0.0),
+            direction: (1.0, 0.0),
+        };
+        let b = Line2 {
+            point: (0.0, 1.0),
+            direction: (1.0, 0.001),
+        };
         assert!(intersect(a, b).is_none());
-        let c = Line2 { point: (0.0, 1.0), direction: (0.0, 1.0) };
+        let c = Line2 {
+            point: (0.0, 1.0),
+            direction: (0.0, 1.0),
+        };
         assert!(intersect(a, c).is_some());
     }
 }

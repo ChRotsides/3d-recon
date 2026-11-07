@@ -261,11 +261,16 @@ impl CoverageGrid {
     }
 
     pub fn is_covered(&self, k: VoxelKey) -> bool {
-        self.voxels.get(&k).is_some_and(|v| v.quality >= self.params.q_min)
+        self.voxels
+            .get(&k)
+            .is_some_and(|v| v.quality >= self.params.q_min)
     }
 
     pub fn covered_count(&self) -> usize {
-        self.voxels.values().filter(|v| v.quality >= self.params.q_min).count()
+        self.voxels
+            .values()
+            .filter(|v| v.quality >= self.params.q_min)
+            .count()
     }
 
     /// Fraction of *observed* voxels that reach the quality bar.
@@ -320,9 +325,8 @@ impl CoverageGrid {
             let e0 = pick_tangent(up);
             let e1 = up.cross(e0);
             let angle = h.dot(e1).atan2(h.dot(e0));
-            let idx = (((angle + std::f32::consts::PI)
-                / (std::f32::consts::PI * 0.5))
-                .floor() as usize)
+            let idx = (((angle + std::f32::consts::PI) / (std::f32::consts::PI * 0.5)).floor()
+                as usize)
                 .min(3);
             buckets[idx].0 += 1;
             if v.quality >= self.params.q_min {

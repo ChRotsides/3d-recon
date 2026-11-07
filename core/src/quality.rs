@@ -299,7 +299,11 @@ impl QualityGate {
         // A poor frame still scores, just far below any usable one, so it can
         // never displace a good candidate and can always stand in for a
         // missing one. There is always something to take a picture of.
-        let score = if self.viable(f) { self.score(f) } else { self.score(f) - 1.0e6 };
+        let score = if self.viable(f) {
+            self.score(f)
+        } else {
+            self.score(f) - 1.0e6
+        };
         let better = match self.held {
             None => true,
             Some(held) => score > held.score,
@@ -440,8 +444,7 @@ impl QualityGate {
             Some(prev) => {
                 let moved = prev.position().distance(f.pose.position());
                 let rotated = prev.angle_to(&f.pose);
-                moved >= self.params.min_translation_m
-                    || rotated >= self.params.min_rotation_rad
+                moved >= self.params.min_translation_m || rotated >= self.params.min_rotation_rad
             }
         };
         if !far_enough {
@@ -624,7 +627,8 @@ pub fn assess_completion(
 
     let blocker = if capture.tracking_health() < thresholds.min_tracking_health {
         Some(Incomplete::TrackingUnhealthy)
-    } else if capture.keyframes() > 0 && capture.median_features() < thresholds.min_median_features {
+    } else if capture.keyframes() > 0 && capture.median_features() < thresholds.min_median_features
+    {
         Some(Incomplete::Featureless)
     } else if capture.keyframes() < thresholds.min_keyframes {
         Some(Incomplete::TooFewKeyframes)

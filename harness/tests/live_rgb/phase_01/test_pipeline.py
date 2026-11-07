@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+from recon.image_stitch import _capture_order_pairs
 from recon.live_rgb.pipeline import (
     _backproject,
     _prepare_stitch_images,
@@ -16,7 +17,6 @@ from recon.live_rgb.pipeline import (
     render_face,
 )
 from recon.live_rgb.replay import frames_from_bundle, rgb_input_digest
-from recon.image_stitch import _capture_order_pairs
 
 
 def test_virtual_cameras_tile_sphere_from_one_center() -> None:

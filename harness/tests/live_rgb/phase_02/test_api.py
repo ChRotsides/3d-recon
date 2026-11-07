@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from fastapi.testclient import TestClient
-
 from recon.live_rgb.api import create_app
 from recon.live_rgb.schema import FORBIDDEN_GEOMETRY_FIELDS
 
@@ -11,7 +10,9 @@ from recon.live_rgb.schema import FORBIDDEN_GEOMETRY_FIELDS
 def test_guidance_and_preview_contract_are_rgb_only(tmp_path, textured_images):
     client = TestClient(create_app(tmp_path))
     assert client.post("/v1/sessions", json={"session_id": "s"}).status_code == 200
-    assert client.post("/v1/stations", json={"session_id": "s", "station_id": "t"}).status_code == 200
+    assert (
+        client.post("/v1/stations", json={"session_id": "s", "station_id": "t"}).status_code == 200
+    )
     initial = client.get("/v1/guidance/s/t")
     assert initial.status_code == 200
     assert initial.json()["localization"]["state"] == "not_requested"

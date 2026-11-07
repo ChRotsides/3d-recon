@@ -12,7 +12,11 @@ pub struct Vec3 {
 }
 
 impl Vec3 {
-    pub const ZERO: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 0.0 };
+    pub const ZERO: Vec3 = Vec3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
 
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         Vec3 { x, y, z }
@@ -131,15 +135,5 @@ pub fn look_rotation(yaw: f32, pitch: f32) -> [f32; 9] {
     let (sy, cy) = yaw.sin_cos();
     let (sp, cp) = pitch.sin_cos();
     // Ry(yaw) * Rx(pitch), row-major.
-    [
-        cy,
-        sy * sp,
-        sy * cp,
-        0.0,
-        cp,
-        -sp,
-        -sy,
-        cy * sp,
-        cy * cp,
-    ]
+    [cy, sy * sp, sy * cp, 0.0, cp, -sp, -sy, cy * sp, cy * cp]
 }

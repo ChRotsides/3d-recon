@@ -192,13 +192,11 @@ pub fn sample_floor_candidates(
     while a <= hi0 && out.len() < params.max_candidates {
         let mut b = lo1;
         while b <= hi1 && out.len() < params.max_candidates {
-            let far_enough = walls
-                .iter()
-                .all(|(wa, wb)| {
-                    let da = a - wa;
-                    let db = b - wb;
-                    da * da + db * db >= clearance_sq
-                });
+            let far_enough = walls.iter().all(|(wa, wb)| {
+                let da = a - wa;
+                let db = b - wb;
+                da * da + db * db >= clearance_sq
+            });
             if far_enough {
                 out.push(e0 * a + e1 * b + up * floor_y);
             }

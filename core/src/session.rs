@@ -7,8 +7,8 @@
 use crate::coverage::{CoverageGrid, CoverageParams};
 use crate::math::{Pose, Vec3};
 use crate::quality::{
-    assess_completion, CompletionStatus, CompletionThresholds, FrameStats, KeyframeDecision,
-    Nag, QualityGate, QualityParams,
+    assess_completion, CompletionStatus, CompletionThresholds, FrameStats, KeyframeDecision, Nag,
+    QualityGate, QualityParams,
 };
 use crate::script::{CaptureScript, ScriptParams, ShotOutcome, ShotPhase};
 use crate::station::{next_best_station, Station, StationParams};
@@ -169,13 +169,15 @@ impl CaptureSession {
         // script cannot be built until one arrives.
         if self.script.is_none() {
             if let Some(params) = self.pending_script.take() {
-                self.script =
-                    Some(CaptureScript::centre_pass(params, self.up, stats.pose.forward()));
+                self.script = Some(CaptureScript::centre_pass(
+                    params,
+                    self.up,
+                    stats.pose.forward(),
+                ));
             }
         }
 
         let mut shot_outcome = None;
-        let mut redundant = false;
         let usable_here = stats.tracking == crate::quality::TrackingState::Normal;
         self.capture.observe_frame(stats, usable_here);
 
@@ -193,7 +195,7 @@ impl CaptureSession {
         // for a capture that took its own pictures; with a shutter it would
         // mean the user presses take-picture in a well-covered room and
         // nothing happens, which is the one thing a camera must never do.
-        redundant = self.is_redundant(stats, points, normals);
+        let redundant = self.is_redundant(stats, points, normals);
         let selection = self.gate.offer(stats);
         if selection.hold {
             self.held_points.clear();
@@ -238,13 +240,8 @@ impl CaptureSession {
 
         if stats.timestamp_s - self.last_station_at >= self.config.station_interval_s {
             let user = self.last_good_pose.unwrap_or(stats.pose).position();
-            self.last_station = next_best_station(
-                &self.grid,
-                user,
-                self.floor_y,
-                self.up,
-                self.config.station,
-            );
+            self.last_station =
+                next_best_station(&self.grid, user, self.floor_y, self.up, self.config.station);
             self.last_station_at = stats.timestamp_s;
         }
 
@@ -348,12 +345,9 @@ impl CaptureSession {
         if points.is_empty() {
             return false;
         }
-        let (novel, contributing) = self.grid.novel_fraction(
-            points,
-            normals,
-            stats.pose.position(),
-            stats.blur_score,
-        );
+        let (novel, contributing) =
+            self.grid
+                .novel_fraction(points, normals, stats.pose.position(), stats.blur_score);
         contributing >= self.config.min_novel_samples && novel < self.config.min_novel_fraction
     }
 

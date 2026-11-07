@@ -35,7 +35,11 @@ impl From<FfiVec3> for Vec3 {
 
 impl From<Vec3> for FfiVec3 {
     fn from(v: Vec3) -> FfiVec3 {
-        FfiVec3 { x: v.x, y: v.y, z: v.z }
+        FfiVec3 {
+            x: v.x,
+            y: v.y,
+            z: v.z,
+        }
     }
 }
 
@@ -332,7 +336,10 @@ impl FfiCaptureSession {
     #[uniffi::constructor]
     pub fn new(gravity: FfiVec3) -> Self {
         FfiCaptureSession {
-            inner: Mutex::new(CaptureSession::new(SessionConfig::default(), gravity.into())),
+            inner: Mutex::new(CaptureSession::new(
+                SessionConfig::default(),
+                gravity.into(),
+            )),
         }
     }
 
@@ -354,7 +361,9 @@ impl FfiCaptureSession {
         normals: Vec<f32>,
     ) -> Result<FfiGuidance, FfiError> {
         if frame.pose.r.len() != 9 {
-            return Err(FfiError::BadPose { count: frame.pose.r.len() as u32 });
+            return Err(FfiError::BadPose {
+                count: frame.pose.r.len() as u32,
+            });
         }
         if points.len() != normals.len() {
             return Err(FfiError::LengthMismatch {
@@ -367,7 +376,10 @@ impl FfiCaptureSession {
 
         let stats = FrameStats {
             timestamp_s: frame.timestamp_s,
-            pose: Pose { r, t: frame.pose.t.into() },
+            pose: Pose {
+                r,
+                t: frame.pose.t.into(),
+            },
             tracking: frame.tracking.into(),
             blur_score: frame.blur_score,
             exposure_clip_ratio: frame.exposure_clip_ratio,
@@ -377,8 +389,18 @@ impl FfiCaptureSession {
             lux: frame.lux,
         };
 
-        let pts: Vec<Vec3> = points.chunks_exact(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
-        let nrm: Vec<Vec3> = normals.chunks_exact(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
+        let pts: Vec<Vec3> = points
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| Vec3::new(c[0], c[1], c[2]))
+            .collect();
+        let nrm: Vec<Vec3> = normals
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| Vec3::new(c[0], c[1], c[2]))
+            .collect();
 
         let update = self.inner.lock().unwrap().observe_frame(&stats, &pts, &nrm);
         Ok(FfiGuidance {
@@ -402,7 +424,11 @@ impl FfiCaptureSession {
             keyframes: update.keyframes,
             shot: if update.shot.is_none() && update.shot_progress.1 > 0 {
                 Some(FfiShot {
-                    direction: FfiVec3 { x: 0.0, y: 0.0, z: 0.0 },
+                    direction: FfiVec3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
                     height: FfiShotHeight::Middle,
                     at_station: true,
                     state: FfiShotState::Finished,
@@ -410,25 +436,30 @@ impl FfiCaptureSession {
                     total: update.shot_progress.1,
                     skipped: update.shots_skipped,
                 })
-            } else { update.shot.map(|s| FfiShot {
-                direction: update.shot_direction.unwrap_or(crate::math::Vec3::ZERO).into(),
-                height: match s.height {
-                    crate::script::ShotHeight::Bottom => FfiShotHeight::Bottom,
-                    crate::script::ShotHeight::Middle => FfiShotHeight::Middle,
-                    crate::script::ShotHeight::Top => FfiShotHeight::Top,
-                },
-                at_station: s.phase == crate::script::ShotPhase::Station,
-                state: match update.shot_outcome {
-                    Some(crate::script::ShotOutcome::Take) => FfiShotState::Take,
-                    Some(crate::script::ShotOutcome::NotSteady) => FfiShotState::NotSteady,
-                    Some(crate::script::ShotOutcome::NotMoved) => FfiShotState::NotMoved,
-                    Some(crate::script::ShotOutcome::Finished) => FfiShotState::Finished,
-                    _ => FfiShotState::NotAimed,
-                },
-                taken: update.shot_progress.0,
-                total: update.shot_progress.1,
-                skipped: update.shots_skipped,
-            })},
+            } else {
+                update.shot.map(|s| FfiShot {
+                    direction: update
+                        .shot_direction
+                        .unwrap_or(crate::math::Vec3::ZERO)
+                        .into(),
+                    height: match s.height {
+                        crate::script::ShotHeight::Bottom => FfiShotHeight::Bottom,
+                        crate::script::ShotHeight::Middle => FfiShotHeight::Middle,
+                        crate::script::ShotHeight::Top => FfiShotHeight::Top,
+                    },
+                    at_station: s.phase == crate::script::ShotPhase::Station,
+                    state: match update.shot_outcome {
+                        Some(crate::script::ShotOutcome::Take) => FfiShotState::Take,
+                        Some(crate::script::ShotOutcome::NotSteady) => FfiShotState::NotSteady,
+                        Some(crate::script::ShotOutcome::NotMoved) => FfiShotState::NotMoved,
+                        Some(crate::script::ShotOutcome::Finished) => FfiShotState::Finished,
+                        _ => FfiShotState::NotAimed,
+                    },
+                    taken: update.shot_progress.0,
+                    total: update.shot_progress.1,
+                    skipped: update.shots_skipped,
+                })
+            },
         })
     }
 
@@ -481,15 +512,19 @@ impl FfiCaptureSession {
     /// or `None` if the script had already finished — the button is live for
     /// as long as the capture is, and the last shot can land in between.
     pub fn skip_shot(&self) -> Option<FfiSkippedShot> {
-        self.inner.lock().unwrap().skip_shot().map(|s| FfiSkippedShot {
-            yaw_deg: s.yaw_rad.to_degrees(),
-            height: match s.height {
-                crate::script::ShotHeight::Bottom => FfiShotHeight::Bottom,
-                crate::script::ShotHeight::Middle => FfiShotHeight::Middle,
-                crate::script::ShotHeight::Top => FfiShotHeight::Top,
-            },
-            at_station: s.phase == crate::script::ShotPhase::Station,
-        })
+        self.inner
+            .lock()
+            .unwrap()
+            .skip_shot()
+            .map(|s| FfiSkippedShot {
+                yaw_deg: s.yaw_rad.to_degrees(),
+                height: match s.height {
+                    crate::script::ShotHeight::Bottom => FfiShotHeight::Bottom,
+                    crate::script::ShotHeight::Middle => FfiShotHeight::Middle,
+                    crate::script::ShotHeight::Top => FfiShotHeight::Top,
+                },
+                at_station: s.phase == crate::script::ShotPhase::Station,
+            })
     }
 
     /// Every shot given up on so far, for the bundle written at the end.
@@ -517,7 +552,10 @@ impl FfiCaptureSession {
     /// Takes effect on the next frame, whose heading becomes the script's yaw
     /// origin — so call it when the user is standing where they mean to start.
     pub fn start_script(&self) {
-        self.inner.lock().unwrap().start_script(crate::script::ScriptParams::default());
+        self.inner
+            .lock()
+            .unwrap()
+            .start_script(crate::script::ScriptParams::default());
     }
 
     /// Call after ARKit/ARCore reports a successful relocalisation, so the next
@@ -528,7 +566,11 @@ impl FfiCaptureSession {
 
     /// Where to send a user who has lost tracking (PLAN.md §6.1).
     pub fn last_known_good_position(&self) -> Option<FfiVec3> {
-        self.inner.lock().unwrap().last_known_good_position().map(Into::into)
+        self.inner
+            .lock()
+            .unwrap()
+            .last_known_good_position()
+            .map(Into::into)
     }
 
     /// The coverage grid as points the client can draw over the real surfaces.
@@ -565,7 +607,7 @@ impl FfiCaptureSession {
         let mut points = Vec::with_capacity(expected * 3);
         let mut fill = Vec::with_capacity(expected);
         for (key, vox) in voxels {
-            if stride > 1 && hash_key(key) % stride != 0 {
+            if stride > 1 && !hash_key(key).is_multiple_of(stride) {
                 continue;
             }
             let c = grid.centre_of(key);
@@ -574,7 +616,11 @@ impl FfiCaptureSession {
             points.push(c.z);
             fill.push((vox.quality / q_min).clamp(0.0, 1.0));
         }
-        FfiCoverageCloud { points, fill, total: total as u32 }
+        FfiCoverageCloud {
+            points,
+            fill,
+            total: total as u32,
+        }
     }
 }
 
@@ -632,7 +678,11 @@ mod tests {
     use super::*;
 
     fn session() -> FfiCaptureSession {
-        FfiCaptureSession::new(FfiVec3 { x: 0.0, y: -1.0, z: 0.0 })
+        FfiCaptureSession::new(FfiVec3 {
+            x: 0.0,
+            y: -1.0,
+            z: 0.0,
+        })
     }
 
     /// A frame that clears every quality gate, so the geometry is integrated.
@@ -680,8 +730,21 @@ mod tests {
         let (p, n) = wall(20);
         // Two viewpoints: geometry is credited when the held frame is written,
         // which happens once the camera has moved on from it.
-        s.observe(frame(0.0, FfiVec3 { x: 0.5, y: 0.5, z: 2.0 }), p, n).unwrap();
-        s.capture_now().expect("the shutter should take the held frame");
+        s.observe(
+            frame(
+                0.0,
+                FfiVec3 {
+                    x: 0.5,
+                    y: 0.5,
+                    z: 2.0,
+                },
+            ),
+            p,
+            n,
+        )
+        .unwrap();
+        s.capture_now()
+            .expect("the shutter should take the held frame");
         let cloud = s.coverage_cloud(4096);
         assert!(cloud.total > 0, "a wall in view must produce voxels");
         assert_eq!(cloud.points.len(), cloud.fill.len() * 3);
@@ -692,14 +755,51 @@ mod tests {
     fn fill_rises_towards_one_as_a_voxel_is_re_observed() {
         let s = session();
         let (p, n) = wall(20);
-        s.observe(frame(0.0, FfiVec3 { x: 0.5, y: 0.5, z: 2.0 }), p.clone(), n.clone()).unwrap();
+        s.observe(
+            frame(
+                0.0,
+                FfiVec3 {
+                    x: 0.5,
+                    y: 0.5,
+                    z: 2.0,
+                },
+            ),
+            p.clone(),
+            n.clone(),
+        )
+        .unwrap();
         s.capture_now().expect("first shot");
-        let first = s.coverage_cloud(4096).fill.iter().cloned().fold(0.0f32, f32::max);
+        let first = s
+            .coverage_cloud(4096)
+            .fill
+            .iter()
+            .cloned()
+            .fold(0.0f32, f32::max);
         // A second view from elsewhere, taken deliberately as before.
-        s.observe(frame(1.0, FfiVec3 { x: 0.5, y: 0.5, z: 1.2 }), p, n).unwrap();
+        s.observe(
+            frame(
+                1.0,
+                FfiVec3 {
+                    x: 0.5,
+                    y: 0.5,
+                    z: 1.2,
+                },
+            ),
+            p,
+            n,
+        )
+        .unwrap();
         s.capture_now().expect("second shot");
-        let second = s.coverage_cloud(4096).fill.iter().cloned().fold(0.0f32, f32::max);
-        assert!(second > first, "a second view should raise fill: {first} -> {second}");
+        let second = s
+            .coverage_cloud(4096)
+            .fill
+            .iter()
+            .cloned()
+            .fold(0.0f32, f32::max);
+        assert!(
+            second > first,
+            "a second view should raise fill: {first} -> {second}"
+        );
         assert!(second <= 1.0, "fill is clamped at the quality bar");
     }
 
@@ -710,17 +810,35 @@ mod tests {
         let s = session();
         let (p, n) = wall(40);
         // Two viewpoints: geometry is credited when the held frame is written.
-        s.observe(frame(0.0, FfiVec3 { x: 0.5, y: 0.5, z: 2.0 }), p, n).unwrap();
-        s.capture_now().expect("the shutter should take the held frame");
+        s.observe(
+            frame(
+                0.0,
+                FfiVec3 {
+                    x: 0.5,
+                    y: 0.5,
+                    z: 2.0,
+                },
+            ),
+            p,
+            n,
+        )
+        .unwrap();
+        s.capture_now()
+            .expect("the shutter should take the held frame");
         let budget = 50;
         let a = s.coverage_cloud(budget);
         let b = s.coverage_cloud(budget);
-        assert!(a.total > budget, "test needs more voxels than the budget to be meaningful");
+        assert!(
+            a.total > budget,
+            "test needs more voxels than the budget to be meaningful"
+        );
         // A budget, not a cap — see coverage_cloud. Close enough that a client
         // sizing a buffer from it is not surprised, and never everything.
         assert!(
             a.fill.len() <= (budget as f32 * 1.5) as usize && a.fill.len() < a.total as usize,
-            "kept {} of {} against a budget of {budget}", a.fill.len(), a.total,
+            "kept {} of {} against a budget of {budget}",
+            a.fill.len(),
+            a.total,
         );
         assert!(!a.points.is_empty(), "subsampling must not drop everything");
         let mut pa = a.points.clone();

@@ -53,7 +53,7 @@ impl ShotHeight {
         match self {
             ShotHeight::Bottom => -0.61, // ~35 deg down
             ShotHeight::Middle => 0.0,
-            ShotHeight::Top => 0.52,     // ~30 deg up
+            ShotHeight::Top => 0.52, // ~30 deg up
         }
     }
 }
@@ -172,7 +172,11 @@ impl CaptureScript {
         // Project the initial heading onto the floor plane; looking slightly up
         // or down at the start must not tilt every subsequent target.
         let flat = facing - up * facing.dot(up);
-        let reference = if flat.length() < 1e-3 { pick_tangent(up) } else { flat.normalized() };
+        let reference = if flat.length() < 1e-3 {
+            pick_tangent(up)
+        } else {
+            flat.normalized()
+        };
 
         let mut shots = Vec::new();
         for i in 0..params.centre_yaws {
@@ -194,7 +198,13 @@ impl CaptureScript {
                 });
             }
         }
-        CaptureScript { params, shots, reference, up, origin: None }
+        CaptureScript {
+            params,
+            shots,
+            reference,
+            up,
+            origin: None,
+        }
     }
 
     /// Append the shots asked for at a station the solver has chosen.
@@ -232,14 +242,20 @@ impl CaptureScript {
     /// the counter has to keep meaning "frames you actually got".
     pub fn progress(&self) -> (usize, usize) {
         (
-            self.shots.iter().filter(|s| s.state == ShotState::Taken).count(),
+            self.shots
+                .iter()
+                .filter(|s| s.state == ShotState::Taken)
+                .count(),
             self.shots.len(),
         )
     }
 
     /// How many shots the user has given up on.
     pub fn skipped(&self) -> usize {
-        self.shots.iter().filter(|s| s.state == ShotState::Skipped).count()
+        self.shots
+            .iter()
+            .filter(|s| s.state == ShotState::Skipped)
+            .count()
     }
 
     /// The abandoned shots, for the client to record in the bundle. The harness
@@ -254,7 +270,10 @@ impl CaptureScript {
     }
 
     pub fn phase_finished(&self, phase: ShotPhase) -> bool {
-        self.shots.iter().filter(|s| s.phase == phase).all(|s| s.done())
+        self.shots
+            .iter()
+            .filter(|s| s.phase == phase)
+            .all(|s| s.done())
     }
 
     /// The world-space direction the user should point the camera in.
@@ -321,7 +340,12 @@ impl CaptureScript {
 }
 
 fn shots_push(shots: &mut Vec<Shot>, phase: ShotPhase, yaw_rad: f32, height: ShotHeight) {
-    shots.push(Shot { phase, yaw_rad, height, state: ShotState::Pending });
+    shots.push(Shot {
+        phase,
+        yaw_rad,
+        height,
+        state: ShotState::Pending,
+    });
 }
 
 #[cfg(test)]
@@ -330,7 +354,11 @@ mod tests {
     use crate::math::{look_rotation, Pose};
     use crate::quality::TrackingState;
 
-    const UP: Vec3 = Vec3 { x: 0.0, y: 1.0, z: 0.0 };
+    const UP: Vec3 = Vec3 {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+    };
 
     fn facing_north() -> Vec3 {
         Vec3::new(0.0, 0.0, -1.0)
@@ -350,7 +378,10 @@ mod tests {
         let yaw = dir.dot(e1).atan2(dir.dot(e0));
         FrameStats {
             timestamp_s: 0.0,
-            pose: Pose { r: look_rotation(yaw, pitch), t: Vec3::ZERO },
+            pose: Pose {
+                r: look_rotation(yaw, pitch),
+                t: Vec3::ZERO,
+            },
             tracking: TrackingState::Normal,
             blur_score: 300.0,
             exposure_clip_ratio: 0.0,
@@ -429,7 +460,10 @@ mod tests {
         // First shot is Bottom, so it points ahead and down.
         let flat = Vec3::new(first.x, 0.0, first.z).normalized();
         assert!(flat.dot(facing_north()) > 0.99, "{flat:?}");
-        assert!(first.y < 0.0, "the first shot should look down at the floor junction");
+        assert!(
+            first.y < 0.0,
+            "the first shot should look down at the floor junction"
+        );
     }
 
     #[test]
@@ -438,7 +472,10 @@ mod tests {
         let want = s.direction_of(s.current().unwrap());
 
         let elsewhere = Vec3::new(1.0, 0.0, 0.0);
-        assert_eq!(s.evaluate(&aimed_at(&s, elsewhere, 0.1)), ShotOutcome::NotAimed);
+        assert_eq!(
+            s.evaluate(&aimed_at(&s, elsewhere, 0.1)),
+            ShotOutcome::NotAimed
+        );
 
         // Aimed but still swinging: this is precisely the frame that comes back
         // blurred, and blur was the largest rejection category on real captures.
@@ -458,7 +495,10 @@ mod tests {
             s.commit(Vec3::ZERO);
         }
         assert!(s.phase_finished(ShotPhase::Centre));
-        assert_eq!(s.evaluate(&aimed_at(&s, facing_north(), 0.0)), ShotOutcome::Finished);
+        assert_eq!(
+            s.evaluate(&aimed_at(&s, facing_north(), 0.0)),
+            ShotOutcome::Finished
+        );
     }
 
     #[test]
@@ -469,11 +509,21 @@ mod tests {
         s.add_station();
         let (_, total) = s.progress();
         assert_eq!(total, 36 + 20);
-        let station: Vec<_> = s.shots.iter().filter(|x| x.phase == ShotPhase::Station).collect();
-        assert!(station.iter().all(|x| x.height != ShotHeight::Top), "top is the centre pass's job");
+        let station: Vec<_> = s
+            .shots
+            .iter()
+            .filter(|x| x.phase == ShotPhase::Station)
+            .collect();
+        assert!(
+            station.iter().all(|x| x.height != ShotHeight::Top),
+            "top is the centre pass's job"
+        );
         for c in s.shots.iter().filter(|x| x.phase == ShotPhase::Centre) {
             for t in &station {
-                assert!((c.yaw_rad - t.yaw_rad).abs() > 1e-3, "station repeats a centre direction");
+                assert!(
+                    (c.yaw_rad - t.yaw_rad).abs() > 1e-3,
+                    "station repeats a centre direction"
+                );
             }
         }
     }
@@ -578,7 +628,9 @@ mod tests {
         // script rotated under them.
         let level = CaptureScript::centre_pass(ScriptParams::default(), UP, facing_north());
         let tilted = CaptureScript::centre_pass(
-            ScriptParams::default(), UP, Vec3::new(0.0, -0.6, -1.0).normalized(),
+            ScriptParams::default(),
+            UP,
+            Vec3::new(0.0, -0.6, -1.0).normalized(),
         );
         let a = level.direction_of(level.current().unwrap());
         let b = tilted.direction_of(tilted.current().unwrap());

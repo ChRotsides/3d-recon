@@ -4,7 +4,6 @@ import json
 import shutil
 
 import numpy as np
-
 from recon.live_rgb.incremental import (
     IncrementalGraphEngine,
     _nearest_coverage_target,

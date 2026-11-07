@@ -25,13 +25,13 @@ import numpy as np
 from recon.image_stitch import (
     OverlapEdge,
     StitchError,
-    _FeatureSet,
-    _MatchedEdge,
     _center_transform,
     _components,
     _estimate_focal,
     _extract_rootsift,
+    _FeatureSet,
     _match_rootsift_pair,
+    _MatchedEdge,
     _maximum_spanning_rotations,
     _nearest_rotation,
     _photometric_score,
@@ -386,14 +386,20 @@ class IncrementalGraphEngine:
         except (cv2.error, np.linalg.LinAlgError):
             _atomic_json(path, result)
             return result
-        if gradient < float(MATCH_CONFIG["minimum_gradient_correlation"]) or intensity < 0.35 or overlap < 0.08:
+        if (
+            gradient < float(MATCH_CONFIG["minimum_gradient_correlation"])
+            or intensity < 0.35
+            or overlap < 0.08
+        ):
             result["reason"] = "photometric_mismatch"
             _atomic_json(path, result)
             return result
         # A projective homography whose singular values are far apart is
         # dominated by translation/non-planarity rather than pure station rotation.
         singular = np.linalg.svd(homography_centered, compute_uv=False)
-        parallax_risk = float(np.clip(np.log(max(singular) / max(min(singular), 1e-9)) / 12.0, 0, 1))
+        parallax_risk = float(
+            np.clip(np.log(max(singular) / max(min(singular), 1e-9)) / 12.0, 0, 1)
+        )
         public = OverlapEdge(
             first=first_index,
             second=second_index,
@@ -443,7 +449,10 @@ class IncrementalGraphEngine:
     def _all_cached_edges(
         self, frames: list[CachedFrame], images: list[np.ndarray]
     ) -> tuple[list[_MatchedEdge], list[dict[str, Any]]]:
-        features = [self._features(frame.checksum, image) for frame, image in zip(frames, images)]
+        features = [
+            self._features(frame.checksum, image)
+            for frame, image in zip(frames, images, strict=False)
+        ]
         edges: list[_MatchedEdge] = []
         rejected: list[dict[str, Any]] = []
         count = len(frames)
@@ -505,7 +514,13 @@ class IncrementalGraphEngine:
             )
             angle = float(np.degrees(np.arccos(np.clip((np.trace(relative) - 1) / 2, -1, 1))))
             if angle > 95.0:
-                rejected.append({"first": edge.public.first, "second": edge.public.second, "reason": "false_link"})
+                rejected.append(
+                    {
+                        "first": edge.public.first,
+                        "second": edge.public.second,
+                        "reason": "false_link",
+                    }
+                )
                 continue
             accepted.append(
                 _MatchedEdge(
@@ -555,7 +570,9 @@ class IncrementalGraphEngine:
         for index, rotation in rotations.items():
             yaw, pitch = self._direction(rotation)
             center_column = int(((yaw + 180.0) % 360.0) / 360.0 * COVERAGE_WIDTH)
-            center_row = int(np.clip((90.0 - pitch) / 180.0 * COVERAGE_HEIGHT, 0, COVERAGE_HEIGHT - 1))
+            center_row = int(
+                np.clip((90.0 - pitch) / 180.0 * COVERAGE_HEIGHT, 0, COVERAGE_HEIGHT - 1)
+            )
             # Approximate the image footprint using a conservative 70x50 degree cone.
             for row in range(max(0, center_row - 2), min(COVERAGE_HEIGHT, center_row + 3)):
                 for offset in range(-2, 3):
@@ -572,12 +589,37 @@ class IncrementalGraphEngine:
             edges = [edge for frame in unique for edge in incident.get(frame, [])]
             independent = len(unique)
             photographed = min(1.0, float(independent))
-            edge_strength = float(np.mean([min(1.0, e["confidence"] / 2.0) for e in edges])) if edges else 0.0
-            spread = float(np.mean([min(e["first_feature_coverage"], e["second_feature_coverage"]) for e in edges])) if edges else 0.0
-            reprojection = float(np.mean([e["median_reprojection_error"] for e in edges])) if edges else 0.0
-            sharpness = float(np.mean([frames[item].quality["sharpness"] for item in unique])) if unique else 0.0
-            exposure = float(np.mean([frames[item].quality["exposure"] for item in unique])) if unique else 0.0
-            parallax = float(max((item.get("parallax_risk", 0.0) for item in graph["rejections"]), default=0.0))
+            edge_strength = (
+                float(np.mean([min(1.0, e["confidence"] / 2.0) for e in edges])) if edges else 0.0
+            )
+            spread = (
+                float(
+                    np.mean(
+                        [
+                            min(e["first_feature_coverage"], e["second_feature_coverage"])
+                            for e in edges
+                        ]
+                    )
+                )
+                if edges
+                else 0.0
+            )
+            reprojection = (
+                float(np.mean([e["median_reprojection_error"] for e in edges])) if edges else 0.0
+            )
+            sharpness = (
+                float(np.mean([frames[item].quality["sharpness"] for item in unique]))
+                if unique
+                else 0.0
+            )
+            exposure = (
+                float(np.mean([frames[item].quality["exposure"] for item in unique]))
+                if unique
+                else 0.0
+            )
+            parallax = float(
+                max((item.get("parallax_risk", 0.0) for item in graph["rejections"]), default=0.0)
+            )
             reasons: list[str] = []
             if independent == 0:
                 reasons.append("missing")
@@ -744,7 +786,9 @@ class IncrementalGraphEngine:
                     best = candidate
             if best and best[0] >= 0.35 and best[2]["feature_spread"] >= 0.002:
                 reference_index = best[2]["reference_index"]
-                reference_rotation = np.asarray(snapshot["graph"]["rotations"][str(reference_index)])
+                reference_rotation = np.asarray(
+                    snapshot["graph"]["rotations"][str(reference_index)]
+                )
                 focal = float(snapshot["graph"]["focal_px"] or max(image.shape[:2]))
                 intrinsic = np.diag([focal, focal, 1.0])
                 inverse = np.diag([1.0 / focal, 1.0 / focal, 1.0])
@@ -780,9 +824,7 @@ class IncrementalGraphEngine:
                 float(localization["pitch_deg"]),
                 result_version,
             )
-        _atomic_json(
-            station / "incremental" / "versions" / f"v{result_version:06d}.json", response
-        )
+        _atomic_json(station / "incremental" / "versions" / f"v{result_version:06d}.json", response)
         _atomic_json(station / "incremental" / "current.json", response)
         _atomic_json(
             station / "incremental" / "events" / f"v{result_version:06d}.json",

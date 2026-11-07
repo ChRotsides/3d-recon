@@ -21,6 +21,7 @@ def test_textureless_preview_is_unlocalized_idempotent_and_does_not_mutate_graph
     tmp_path, textured_images
 ):
     import io
+
     from PIL import Image
 
     service = LiveRgbService(tmp_path)

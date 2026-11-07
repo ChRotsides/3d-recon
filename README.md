@@ -122,7 +122,7 @@ You can use, change and share it. If you distribute it, or run a modified versio
 you must publish the complete source under the same license.
 
 **Commercial licensing:** if AGPL doesn't work for your product, contact Charalambos Rotsides at
-[lhampis@gmail.com](mailto:lhampis@gmail.com) about a commercial license for the code in this repository.
+[charalambosrotsides@gmail.com](mailto:charalambosrotsides@gmail.com) or [charalambosrotsides@outlook.com](mailto:charalambosrotsides@outlook.com) about a commercial license for the code in this repository.
 
 Copyright (C) 2026 Charalambos Rotsides
 

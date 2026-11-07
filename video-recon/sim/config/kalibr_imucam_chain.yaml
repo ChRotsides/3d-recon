@@ -1,0 +1,19 @@
+%YAML:1.0
+
+# Simulated ground robot (video-recon/sim/sensors.py): 640x360 pinhole, 70 deg horizontal FOV,
+# camera 0.50 m up on the body's forward axis and pitched 8 deg down. OpenVINS reads `T_imu_cam`
+# as T_CtoI, so the 3x3 block is R_bc (OpenCV camera axes in body/IMU axes) and the translation
+# is the camera centre in body axes. Online calibration refines all of it.
+cam0:
+  T_imu_cam:
+    - [0.000000000, -0.139173101, 0.990268069, 0.000000000]
+    - [-1.000000000, 0.000000000, 0.000000000, 0.000000000]
+    - [0.000000000, -0.990268069, -0.139173101, 0.500000000]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: []
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [457.0074, 457.0074, 319.5000, 179.5000]
+  resolution: [640, 360]
+  rostopic: /cam0/image_raw

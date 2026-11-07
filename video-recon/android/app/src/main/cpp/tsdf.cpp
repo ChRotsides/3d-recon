@@ -1,12 +1,14 @@
 #include "tsdf.h"
+#include <fstream>
+#include <cstring>
 #include <chrono>
 #include <algorithm>
 #include <array>
 
 static double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
-VoxelHashTSDF::VoxelHashTSDF(float voxel, int truncVoxels, float maxWeight, float minWeight, float maxDepth)
-    : voxel_(voxel), trunc_(truncVoxels * voxel), maxW_(maxWeight), minW_(minWeight), maxDepth_(maxDepth), blockSize_(8 * voxel) {}
+VoxelHashTSDF::VoxelHashTSDF(float voxel, int truncVoxels, float maxWeight, float minWeight, float maxDepth, size_t maxBlocks)
+    : voxel_(voxel), trunc_(truncVoxels * voxel), maxW_(maxWeight), minW_(minWeight), maxDepth_(maxDepth), blockSize_(8 * voxel), maxBlocks_(maxBlocks) {}
 
 TsdfBlock& VoxelHashTSDF::block(int64_t k, int bx, int by, int bz) {
     auto it = blocks_.find(k);
@@ -26,11 +28,25 @@ bool VoxelHashTSDF::flying(const uint16_t* d, int w, int h, int u, int v) {
 }
 
 VoxelHashTSDF::Stats VoxelHashTSDF::integrate(const uint16_t* depth, int w, int h, const float K[4], const float R[9], const float c[3],
-                                              const uint8_t* rgb, int rw, int rh, int stride) {
+                                              const uint8_t* rgb, int rw, int rh, int stride, const uint8_t* confidence) {
     Stats st; const double t0 = nowMs();
+    const auto reject = [&](int status) {
+        st.status = status; st.blocks = int(blocks_.size());
+        for (const auto& kv : blocks_) st.points += kv.second.pts.size()/6;
+        st.integrate_ms = nowMs()-t0;
+        return st;
+    };
+    if (!depth || !K || !R || !c || w<=0 || h<=0 || stride<=0 ||
+        w>4096 || h>4096 || !std::isfinite(voxel_) || voxel_<=0 ||
+        !std::isfinite(trunc_) || trunc_<=0 || !std::isfinite(maxDepth_) || maxDepth_<=0 ||
+        K[0]<=0 || K[1]<=0 || (rgb && (rw<=0 || rh<=0))) return reject(2);
+    for(int i=0;i<4;++i) if(!std::isfinite(K[i])) return reject(2);
+    for(int i=0;i<9;++i) if(!std::isfinite(R[i]) || std::abs(R[i])>1.01f) return reject(2);
+    for(int i=0;i<3;++i) if(!std::isfinite(c[i]) || std::abs(c[i])+maxDepth_+trunc_>=32760*blockSize_) return reject(2);
     const float fx = K[0], fy = K[1], cx = K[2], cy = K[3], T = trunc_, V = voxel_, BS = blockSize_;
     std::unordered_set<int64_t> band, carve; const float step = BS * 0.5f; const int phase = frames_ & 3;
     for (int v = 0; v < h; v += stride) for (int u = 0; u < w; u += stride) {
+        if (confidence && !confidence[v * w + u]) continue;
         const float z = depth[v * w + u] / 1000.0f; if (z <= 0 || z > maxDepth_) continue;
         if (flying(depth, w, h, u, v)) continue;
         const float dx = (u - cx) / fx, dy = (v - cy) / fy; const float n = std::sqrt(dx * dx + dy * dy + 1);
@@ -40,13 +56,16 @@ VoxelHashTSDF::Stats VoxelHashTSDF::integrate(const uint16_t* depth, int w, int 
             const float px = c[0] + rx * r, py = c[1] + ry * r, pz = c[2] + rz * r;
             band.insert(key((int)std::floor(px / BS), (int)std::floor(py / BS), (int)std::floor(pz / BS)));
         }
-        if (((u / stride) + (v / stride)) % 2 == 0) for (float r = 0.1f; r < r0; r += BS) {
+        if ((!confidence || confidence[v * w + u] == 255) && ((u / stride) + (v / stride)) % 2 == 0) for (float r = 0.1f; r < r0; r += BS) {
             const float px = c[0] + rx * r, py = c[1] + ry * r, pz = c[2] + rz * r;
             const int64_t k = key((int)std::floor(px / BS), (int)std::floor(py / BS), (int)std::floor(pz / BS));
             if (blocks_.count(k)) carve.insert(k);
         }
     }
     std::vector<std::pair<int64_t, bool>> work; work.reserve(band.size() + carve.size());
+    size_t added=0;
+    for(auto k:band) added+=!blocks_.count(k);
+    if(blocks_.size()+added>maxBlocks_) return reject(1);
     for (auto k : band) work.push_back({k, false});
     for (auto k : carve) if (!band.count(k)) work.push_back({k, true});
     st.blocks_touched = (int)work.size();
@@ -61,12 +80,20 @@ VoxelHashTSDF::Stats VoxelHashTSDF::integrate(const uint16_t* depth, int w, int 
             const float xc = R[0] * px + R[3] * py + R[6] * pz, yc = R[1] * px + R[4] * py + R[7] * pz;
             const int u = (int)std::lround(fx * xc / zc + cx), v = (int)std::lround(fy * yc / zc + cy); if (u < 0 || v < 0 || u >= w || v >= h) continue;
             const float d = depth[v * w + u] / 1000.0f; if (d <= 0 || d > maxDepth_) continue;
+            if (flying(depth, w, h, u, v)) continue;
+            const float weight = confidence ? confidence[v * w + u] / 255.f : 1.f;
+            if (weight <= 0) continue;
             const float sdf = d - zc; if (sdf < -T) continue;
-            const float t = sdf > T ? 1.0f : sdf / T; const float wo = b.w[idx], wn = std::min(maxW_, wo + 1);
-            b.tsdf[idx] = (b.tsdf[idx] * wo + t) / (wo + 1); b.w[idx] = wn; changed = true;
+            const float wo = b.w[idx];
+            // Provisional measurements cannot alter confirmed surfaces or promote themselves
+            // through repeated observations from the same position.
+            if (weight < .99f && (wo >= minW_ || sdf > T)) continue;
+            const float t = sdf > T ? 1.0f : sdf / T;
+            const float wn = std::min(weight < .99f ? minW_ * .5f : maxW_, wo + weight);
+            b.tsdf[idx] = (b.tsdf[idx] * wo + t * weight) / (wo + weight); b.w[idx] = wn; changed = true;
             if (rgb && std::fabs(sdf) < T * 0.5f) {
                 const int ru = std::min(rw - 1, (int)std::lround(u * (float)rw / w)), rv = std::min(rh - 1, (int)std::lround(v * (float)rh / h)); const int q = 4 * (rv * rw + ru), o = idx * 3;
-                for (int ch = 0; ch < 3; ch++) b.rgb[o + ch] = (uint8_t)((b.rgb[o + ch] * wo + rgb[q + ch]) / (wo + 1));
+                for (int ch = 0; ch < 3; ch++) b.rgb[o + ch] = (uint8_t)((b.rgb[o + ch] * wo + rgb[q + ch] * weight) / (wo + weight));
             }
         }
         if (changed) { b.dirty = true; touched_.insert(k); }
@@ -88,7 +115,7 @@ const TsdfBlock* VoxelHashTSDF::neighbour(int bx, int by, int bz, int& i, int& j
 }
 
 void VoxelHashTSDF::extractBlock(TsdfBlock& b) {
-    const float V = voxel_, BS = blockSize_; b.pts.clear();
+    const float V = voxel_, BS = blockSize_; b.pts.clear(); b.confidence.clear();
     const float ox = b.bx * BS + V / 2, oy = b.by * BS + V / 2, oz = b.bz * BS + V / 2;
     for (int i = 0, idx = 0; i < 8; i++) for (int j = 0; j < 8; j++) for (int l = 0; l < 8; l++, idx++) {
         const float w0 = b.w[idx]; if (w0 < minW_) continue; const float t0 = b.tsdf[idx];
@@ -98,6 +125,7 @@ void VoxelHashTSDF::extractBlock(TsdfBlock& b) {
             if (nb->w[idx1] < minW_) continue; const float t1 = nb->tsdf[idx1];
             if ((t0 < 0) == (t1 < 0) || std::fabs(t0 - t1) < 1e-6f) continue;
             const float a = t0 / (t0 - t1);
+            b.confidence.push_back(std::min(w0, nb->w[idx1]));
             b.pts.push_back(ox + i * V + (ax == 0 ? a * V : 0)); b.pts.push_back(oy + j * V + (ax == 1 ? a * V : 0)); b.pts.push_back(oz + l * V + (ax == 2 ? a * V : 0));
             const int o0 = idx * 3, o1 = idx1 * 3;
             for (int ch = 0; ch < 3; ch++) b.pts.push_back((b.rgb[o0 + ch] * (1 - a) + nb->rgb[o1 + ch] * a) / 255.0f);
@@ -107,7 +135,57 @@ void VoxelHashTSDF::extractBlock(TsdfBlock& b) {
 }
 
 size_t VoxelHashTSDF::surface(std::vector<float>& out, size_t maxPoints) const {
-    out.clear(); size_t n = 0;
-    for (auto& kv : blocks_) { const auto& p = kv.second.pts; for (size_t i = 0; i + 5 < p.size() && n < maxPoints; i += 6, n++) out.insert(out.end(), p.begin() + i, p.begin() + i + 6); }
-    return n;
+    out.clear(); if (!maxPoints) return 0;
+    struct Cell { int64_t x,y,z; bool operator==(const Cell& b) const { return x==b.x && y==b.y && z==b.z; } };
+    struct Hash { size_t operator()(const Cell& p) const { return std::hash<int64_t>{}(p.x) ^ (std::hash<int64_t>{}(p.y)*73856093u) ^ (std::hash<int64_t>{}(p.z)*19349663u); } };
+    struct Sample { std::array<float,6> point; float confidence; };
+    std::unordered_map<Cell,Sample,Hash> grid;
+    float origin[3] = {INFINITY,INFINITY,INFINITY};
+    for (const auto& kv : blocks_) for (size_t i=0;i<kv.second.pts.size();i+=6)
+        for(int a=0;a<3;++a) origin[a]=std::min(origin[a],kv.second.pts[i+a]);
+    // Every occupied region contributes. If the budget is exceeded, coarsen the
+    // entire map, rather than truncating an arbitrary prefix of hash blocks.
+    for (double cell=voxel_; ; cell*=2) {
+        grid.clear();
+        for (const auto& kv : blocks_) {
+            const auto& b=kv.second;
+            for(size_t i=0;i<b.pts.size();i+=6) {
+                Cell key{int64_t(std::floor((b.pts[i]-origin[0])/cell)),int64_t(std::floor((b.pts[i+1]-origin[1])/cell)),int64_t(std::floor((b.pts[i+2]-origin[2])/cell))};
+                Sample s; std::copy_n(b.pts.data()+i,6,s.point.begin()); s.confidence=b.confidence[i/6];
+                auto it=grid.find(key);
+                if(it==grid.end()) grid.emplace(key,s);
+                else if(s.confidence>it->second.confidence || (s.confidence==it->second.confidence && s.point<it->second.point)) it->second=s;
+            }
+        }
+        if(grid.size()<=maxPoints) break;
+    }
+    out.reserve(grid.size()*6);
+    for(const auto& kv:grid) out.insert(out.end(),kv.second.point.begin(),kv.second.point.end());
+    return grid.size();
+}
+
+// Export more detail than the bounded live preview. Explicit
+// resets start independent maps; automatic recoveries preserve this map's frame.
+int64_t VoxelHashTSDF::saveSurface(const char* path) const {
+    std::vector<float> sparse;
+    const uint64_t count=surface(sparse,1000000);
+    std::ofstream out(path,std::ios::binary|std::ios::trunc);
+    if(!out) return -1;
+    out<<"ply\nformat binary_little_endian 1.0\ncomment independent_local_frame not_aligned_to_other_segments\n"
+       <<"element vertex "<<count<<"\nproperty float x\nproperty float y\nproperty float z\n"
+       <<"property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n";
+    {
+        const auto &p=sparse;
+        for(size_t i=0;i+5<p.size();i+=6) {
+            for(int k=0;k<6;++k) if(!std::isfinite(p[i+k])) return -1;
+            for(int k=0;k<3;++k) {
+                uint32_t bits; std::memcpy(&bits,&p[i+k],4);
+                const char bytes[4]={char(bits),char(bits>>8),char(bits>>16),char(bits>>24)};
+                out.write(bytes,4);
+            }
+            for(int k=3;k<6;++k) out.put(char(std::lround(std::max(0.f,std::min(1.f,p[i+k]))*255)));
+        }
+    }
+    out.flush(); if(!out) return -1;
+    out.close(); return out ? int64_t(count):-1;
 }

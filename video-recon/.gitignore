@@ -5,3 +5,9 @@ android/build/
 android/app/build/
 android/local.properties
 __pycache__/
+
+# simulator build artefacts and copied viewer assets
+sim/build/
+sim/www/
+sim/__pycache__/
+.deps/

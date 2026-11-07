@@ -1,7 +1,0 @@
-# ninja log v5
-1	2783	1788474330200132881	CMakeFiles/livescan.dir/tsdf.cpp.o	f8ad9b4adf57ef0d
-0	29962	1788474357225225010	CMakeFiles/livescan.dir/livescan.cpp.o	fff76c71c5bdeb08
-9	491	1788474378741298282	/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/build/intermediates/cxx/Debug/5g5l1r22/obj/arm64-v8a/liblivescan.so	c3429e085d446e81
-9	28580	1788475478805981534	CMakeFiles/livescan.dir/livescan.cpp.o	fff76c71c5bdeb08
-28581	29016	1788475479383986412	/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/build/intermediates/cxx/Debug/5g5l1r22/obj/arm64-v8a/liblivescan.so	c3429e085d446e81
-10	580	1788500723785504706	/home/charalambos/Documents/Projects/3d-recon/video-recon/android/app/build/intermediates/cxx/Debug/5g5l1r22/obj/arm64-v8a/liblivescan.so	c3429e085d446e81

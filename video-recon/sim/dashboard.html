@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>sim robot</title>
+<style>
+  body { margin:0; background:#12141a; color:#d7dbe4; font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:8px 14px; background:#191c24; border-bottom:1px solid #262b36; display:flex; gap:18px; align-items:baseline; }
+  header b { font-size:15px; color:#fff; }
+  header span { color:#8b93a3; }
+  .wrap { display:grid; grid-template-columns: 1.15fr 1fr; gap:10px; padding:10px; }
+  .card { background:#191c24; border:1px solid #262b36; border-radius:6px; overflow:hidden; }
+  .card h2 { margin:0; padding:6px 10px; font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+             color:#7f8798; background:#1e222b; border-bottom:1px solid #262b36; font-weight:600; }
+  .card img { display:block; width:100%; image-rendering:pixelated; background:#0d0f14; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  #gl { width:100%; height:340px; display:block; background:#0d0f14; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  td { padding:2px 10px; border-bottom:1px solid #21252e; }
+  td:first-child { color:#8b93a3; width:46%; }
+  td:last-child { text-align:right; color:#eef1f6; }
+  .bar { height:7px; background:#262b36; border-radius:4px; overflow:hidden; margin:6px 10px 10px; }
+  .bar i { display:block; height:100%; background:linear-gradient(90deg,#3d7dff,#41d1a7); }
+  .legend { padding:4px 10px 8px; color:#7f8798; font-size:11px; }
+  .k { color:#41d1a7 } .r { color:#ff5c6e } .o { color:#ffa64d } .b { color:#5c9dff }
+</style>
+</head>
+<body>
+<header>
+  <b>ground robot — live reconstruction</b>
+  <span id="cfg">…</span>
+  <span id="clock"></span>
+  <span id="rtfs"></span>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="card"><h2>camera (what the robot sees)</h2><img id="rgb"></div>
+    <div style="height:10px"></div>
+    <div class="row">
+      <div class="card"><h2>estimated depth</h2><img id="depth"></div>
+      <div class="card"><h2>ground-truth depth</h2><img id="gtdepth"></div>
+    </div>
+    <div style="height:10px"></div>
+    <div class="card"><h2>TSDF surface + paths (<span class="r">estimate</span>, <span class="o">ground truth</span>)</h2>
+      <canvas id="gl"></canvas></div>
+  </div>
+  <div>
+    <div class="card"><h2>costmap the robot plans on</h2><img id="costmap">
+      <div class="legend">black occupied · white known free · grey unknown ·
+        <span class="k">green</span> frontiers · <span class="o">orange</span> path and target ·
+        <span class="r">red</span> estimated pose · <span class="b">blue</span> true pose after alignment</div>
+    </div>
+    <div style="height:10px"></div>
+    <div class="card"><h2>progress</h2>
+      <div class="bar"><i id="bar1" style="width:0"></i></div>
+      <div class="bar"><i id="bar2" style="width:0"></i></div>
+      <table id="stats"></table>
+    </div>
+  </div>
+</div>
+
+<script src="three.min.js"></script>
+<script src="OrbitControls.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let renderer, scene, camera, controls, cloud, estLine, gtLine, framed = false;
+
+function initGL() {
+  const c = $('gl');
+  renderer = new THREE.WebGLRenderer({canvas:c, antialias:false});
+  renderer.setPixelRatio(1);
+  scene = new THREE.Scene(); scene.background = new THREE.Color(0x0d0f14);
+  camera = new THREE.PerspectiveCamera(55, 1, 0.05, 200);
+  camera.position.set(4, 4, 6);
+  controls = new THREE.OrbitControls(camera, c);
+  const g = new THREE.GridHelper(24, 24, 0x2a3040, 0x1d2230); scene.add(g);
+  cloud = new THREE.Points(new THREE.BufferGeometry(),
+      new THREE.PointsMaterial({size:0.028, vertexColors:true}));
+  scene.add(cloud);
+  estLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color:0xff5c6e}));
+  gtLine  = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color:0xffa64d}));
+  scene.add(estLine); scene.add(gtLine);
+  resize(); window.addEventListener('resize', resize);
+  (function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+}
+function resize() {
+  const c = $('gl'); const w = c.clientWidth, h = 340;
+  renderer.setSize(w, h, false); camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+function setLine(line, pts) {
+  const a = new Float32Array(pts.length*3);
+  for (let i=0;i<pts.length;i++){ a[3*i]=pts[i][0]; a[3*i+1]=pts[i][1]; a[3*i+2]=pts[i][2]; }
+  line.geometry.dispose();
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(a,3));
+  line.geometry = g;
+}
+async function pullPoints() {
+  try {
+    const r = await fetch('/points.bin?' + Date.now());
+    const b = new Float32Array(await r.arrayBuffer());
+    const n = b.length/6;
+    const pos = new Float32Array(n*3), col = new Float32Array(n*3);
+    for (let i=0;i<n;i++){ pos[3*i]=b[6*i]; pos[3*i+1]=b[6*i+1]; pos[3*i+2]=b[6*i+2];
+                           col[3*i]=b[6*i+3]; col[3*i+1]=b[6*i+4]; col[3*i+2]=b[6*i+5]; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+    g.setAttribute('color', new THREE.BufferAttribute(col,3));
+    cloud.geometry.dispose(); cloud.geometry = g;
+    if (!framed && n > 500) { g.computeBoundingSphere(); const s = g.boundingSphere;
+      controls.target.copy(s.center); camera.position.set(s.center.x+s.radius*1.4, s.center.y+s.radius*1.1, s.center.z+s.radius*1.4);
+      framed = true; }
+  } catch(e) {}
+  setTimeout(pullPoints, 3000);
+}
+const F = (v,d=2) => (v===undefined||v===null) ? '–' : (typeof v==='number' ? v.toFixed(d) : v);
+async function pull() {
+  try {
+    const s = await (await fetch('/state?' + Date.now())).json();
+    $('cfg').textContent = `world ${s.world} seed ${s.seed} · pose ${s.pose} · depth ${s.depth}`;
+    $('clock').textContent = `t = ${F(s.t,1)} / ${F(s.duration,0)} s`;
+    $('rtfs').textContent = `real-time factor ${F(s.rtf,2)}×`;
+    $('bar1').style.width = (100*s.t/s.duration) + '%';
+    $('bar2').style.width = (100*s.explored) + '%';
+    const m = s.stage_ms || {};
+    $('stats').innerHTML = [
+      ['explored (of GT free area)', (100*s.explored).toFixed(1) + ' %'],
+      ['collisions', s.collisions],
+      ['distance driven', F(s.distance_m) + ' m'],
+      ['TSDF blocks / points', `${s.blocks} / ${s.points}`],
+      ['frontier clusters', s.frontiers],
+      ['current target', s.target ? s.target.join(', ') : '–'],
+      ['VIO initialised at', s.vio_init_s===null||s.vio_init_s===undefined ? 'not yet' : F(s.vio_init_s,2)+' s'],
+      ['render ms', F(m.render,1)], ['pose ms', F(m.pose,1)], ['depth ms', F(m.depth,1)],
+      ['tsdf ms', F(m.tsdf,1)], ['navgrid ms', F(m.navgrid,1)], ['costmap ms', F(m.plan,1)],
+      ['depth scale', F(s.depth_scale,4)],
+      ['wall clock', F(s.wall,0) + ' s'],
+    ].map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
+    if (s.est_path) setLine(estLine, s.est_path);
+    if (s.gt_path) setLine(gtLine, s.gt_path);
+    const stamp = Date.now();
+    for (const k of ['rgb','depth','gtdepth']) if (s.has && s.has[k]) $(k).src = `/${k}.jpg?${stamp}`;
+    if (s.has && s.has.costmap) $('costmap').src = `/costmap.png?${stamp}`;
+  } catch(e) {}
+  setTimeout(pull, 500);
+}
+initGL(); pull(); pullPoints();
+</script>
+</body>
+</html>

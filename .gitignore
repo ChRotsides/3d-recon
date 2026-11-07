@@ -53,3 +53,16 @@ archive/
 
 # Standalone repository with its own history
 livepose/
+
+# Personal files and notes
+Charalambos_Rotsides_CV*
+fucked-it-up.md
+
+# Model training experiments (kept out of this repository)
+point-cloud-training/
+video-recon/pose_transformer/
+
+# Model weights and native build output
+video-recon/android/app/src/main/assets/models/
+*.onnx
+**/.cxx/

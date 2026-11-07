@@ -1,5 +1,9 @@
 # Video + sensors → room geometry (no ARCore)
 
+For the **on-device Live Scan app**, see the [October reliability build and device
+test instructions](docs/live-reliability-2026-10-07.md). The pipeline described
+below is the separate recorded-video reconstruction workflow.
+
 The phone records ordinary **video**, its **raw motion sensors** (accelerometer,
 gyroscope, magnetometer and Android's fused rotation vectors) and the camera's
 own **intrinsic calibration**. Nothing from ARCore is used anywhere.
@@ -39,10 +43,22 @@ video-recon/
     depth.py            writes a SessionBundle and runs the repo's DA3 adapter
     fuse.py             TSDF fusion, mesh/cloud export, viewer copies
     pipeline.py         the stages in order, cached, with manifest.json
+  vio/                OpenVINS offline + streaming runners, ONNX exports, walk viewer
+  sim/                ground-robot simulator: the phone pipeline in a synthetic world
+    world.py            procedural apartment / corridor / hall, raycasting + procedural shading
+    sensors.py          pinhole camera (640x360, 70 deg), 200 Hz IMU synthesised from the true pose
+    vehicle.py          differential drive with limits, slip and refused collisions
+    pose_sources.py     gt | gt_noisy (drifting odometry) | vio (real OpenVINS over a pipe)
+    depth_sources.py    gt | gt_noisy | da3 | dav2 | metric3d | unidepth, the phone's preprocessing
+    tsdf.py, tsdf_c.cpp ctypes shim around android/.../tsdf.cpp, compiled unchanged
+    navgrid.py          3D log-odds grid + 2D costmap, built from the estimate only
+    explore.py, planner.py  frontier exploration, A*, pure pursuit
+    run.py              the closed loop; dashboard.py / dashboard.html  live view
+    eval.py, sweep.py   metrics, plots and the pose x depth matrix
   scripts/reconstruct.py   CLI
   scripts/pull.sh          adb pull the newest recording
   tests/                   unit tests (synthetic data; no phone needed)
-  docs/                    design and recording format
+  docs/                    design, recording format, quality and simulator findings
 ```
 
 ## Record
@@ -133,3 +149,34 @@ into the Kepler environment). `ffprobe` must be on the PATH.
 
 See `docs/design.md` for the conventions (device, camera and world frames, the
 scale estimator) and `docs/recording-format.md` for the on-disk format.
+
+## Simulate: the same pipeline driving a ground robot
+
+`sim/` runs the phone's live stack — VIO pose, monocular depth, the phone's own voxel-hash TSDF
+— inside a procedural indoor world, and lets a differential-drive robot explore it using only
+the pose and the map it discovers. Ground truth exists but is read solely by `eval.py` and by
+the progress line.
+
+```bash
+sim/build.sh                                   # compiles the phone's tsdf.cpp into libtsdf.so
+python video-recon/sim/run.py --world apartment --seed 3 --pose gt_noisy --depth metric3d \
+    --duration 900 --out out/sim/demo --dashboard 8779
+# watch it at http://localhost:8779/ (bound to 0.0.0.0, so also on the LAN)
+python video-recon/sim/eval.py out/sim/demo    # report.json + plots.png
+python video-recon/sim/sweep.py --duration 120 --seeds 1 2 \
+    --vio-config estimator_config_nocalib.yaml   # writes docs/sim-results.md
+```
+
+`--pose gt|gt_noisy|vio`, `--depth gt|gt_noisy|da3|dav2|metric3d|unidepth`,
+`--imu-noise 0` for a perfect IMU, `--scale-error 1.05` to give the odometry a scale bias,
+`--width 480 --height 270` for a 1.4x faster run, `--headless` to drop the dashboard,
+`--record-vio-input` to dump the exact IMU + frame stream in `run_offline` format so it can be
+replayed offline. `vio` needs OpenVINS built per `vio/README.md` plus `vio_stream`
+(`add_executable(vio_stream src/vio_stream.cpp)` appended to `ov_msckf/cmake/ROS1.cmake`); use
+`--vio-config estimator_config_nocalib.yaml`, because online calibration destabilises this rig.
+The estimator's camera chain is generated from `sensors.Camera` into `<out>/vio_config/`, so any
+resolution works without editing a yaml.
+
+The outputs are `gt.txt` / `est.txt` (TUM, camera poses), `commands.csv`, `events.csv`,
+`stats.json`, `tsdf_surface.ply`, `navgrid.npz`, top-down `costmaps/*.png`, keyframes under
+`frames/`, and `report.json` + `plots.png`. See `docs/sim-findings-2026-09-04.md`.

@@ -5,10 +5,24 @@
     <TextView android:id="@+id/status" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:padding="6dp" android:textColor="#dddddd" android:textSize="11sp" android:fontFamily="monospace" android:text="starting" />
     <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
-        <TextureView android:id="@+id/preview" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+        <FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1">
+            <TextureView android:id="@+id/preview" android:layout_width="match_parent" android:layout_height="match_parent" />
+            <com.recon.videoscan.live.FeatureOverlayView android:id="@+id/features"
+                android:layout_width="match_parent" android:layout_height="match_parent"
+                android:contentDescription="XFeat detections. Tap to switch between sampled features and live camera." />
+        </FrameLayout>
         <android.opengl.GLSurfaceView android:id="@+id/pov" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
     </LinearLayout>
-    <android.opengl.GLSurfaceView android:id="@+id/orbit" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1.2" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1.2" android:orientation="horizontal">
+        <android.opengl.GLSurfaceView android:id="@+id/orbit" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+        <com.recon.videoscan.live.ExplorationMapView android:id="@+id/exploration_map"
+            android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:contentDescription="Top-down map: light grey explored space, black unknown space, white observed walls, green current position." />
+    </LinearLayout>
+    <Button android:id="@+id/save_scan" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="Save scan" android:textAllCaps="false" />
+    <Button android:id="@+id/phase" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="MARK STILL (start test phase)" android:textAllCaps="false" />
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center">
         <Button android:id="@+id/reset" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="reset" />
         <Button android:id="@+id/model" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="model" android:textAllCaps="false" />

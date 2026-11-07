@@ -1,0 +1,12 @@
+Depth Anything V2 Small
+Authors: Lihe Yang, Bingyi Kang, Zilong Huang, Xiaogang Xu, Jiashi Feng,
+and Hengshuang Zhao.
+Source: https://github.com/DepthAnything/Depth-Anything-V2
+Weights: https://huggingface.co/depth-anything/Depth-Anything-V2-Small
+License: Apache-2.0 (see DepthAnythingV2-LICENSE.txt).
+
+The bundled dav2_small_model_quantized.onnx is an ONNX conversion with
+quantized weights, reused from this project's existing local model export.
+SHA-256: fcf51f1b230362b28690bb9d1809bf0431f29cad20534e3f589bd7285547f20d
+Its output is relative inverse depth. Live Scan estimates metric scale from
+visual-inertial landmarks and checks consistency before fusing geometry.

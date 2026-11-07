@@ -1,81 +1,140 @@
-# Room capture → 360 panorama + point cloud
+# 3d-recon: phone-only room scanning
 
-Phone capture with no LiDAR, turned into a 360 equirectangular panorama and a
-metric 3D point cloud of the room. **This tree contains only the path that has
-been made to work end to end on real hardware**, documented with its numbers and
-its failure modes in [`docs/capture-to-cloud.md`](docs/capture-to-cloud.md).
+**Turn an ordinary Android phone into a room scanner: no LiDAR, no depth sensor, no ARCore required.**
+3d-recon builds 360° panoramas, metric 3D point clouds and live TSDF reconstructions of indoor spaces from
+the phone's camera and motion sensors, using visual-inertial odometry and monocular depth estimation.
 
-Everything else — the TSDF/floorplan/planes/masking/splat reconstruction
-pipeline, the FastAPI service, the Babylon walkthrough viewer, the iOS client —
-is in `archive/` (git-ignored, nothing deleted) to be built back on top of this
-once it earns its place. The original architecture it came from is
-[`room-scanner-implementation-plan.md`](room-scanner-implementation-plan.md).
+![Simulator dashboard: camera view, estimated and ground-truth depth, the robot's costmap, and the reconstructed TSDF surface](docs/images/sim-dashboard.png)
 
-## The path
+*The simulator dashboard: a virtual robot explores a procedural apartment while the same reconstruction
+code that runs on the phone builds the map.*
+
+## What's in it
+
+| Part | What it does | Where |
+|---|---|---|
+| **Capture → panorama + point cloud** | An Android capture app with a guidance HUD, then Python that projects a 360° equirectangular panorama by pose and builds a cleaned metric point cloud with Depth Anything 3 | `clients/android/`, `core/`, `scripts/capture/`, `viewer/` |
+| **Live Scan (on-device)** | Reconstruction on the phone itself: OpenVINS visual-inertial odometry, monocular depth (Depth Anything V2 / Metric3D / UniDepth, CPU or NPU), voxel-hash TSDF fusion, relocalization and saved PLY segments | `video-recon/android/` |
+| **Video + sensors reconstruction** | Offline reconstruction from an ordinary video plus raw IMU and magnetometer, without ARCore: SfM, depth, TSDF fusion, mesh and cloud export | `video-recon/videorecon/` |
+| **Ground-robot simulator** | The phone pipeline in a synthetic world: procedural apartments, simulated camera and 200 Hz IMU, frontier exploration and A* planning, with metrics against ground truth | `video-recon/sim/` |
+| **Viewers** | Dependency-free single-file HTML viewers for panoramas and point clouds | `viewer/` |
+
+**Who it's for:** developers and researchers working on mobile 3D scanning, indoor mapping, AR, real-estate
+capture or robotics who want a phone-only pipeline they can read and change.
+
+## How it works
 
 ```
-Android app  →  adb pull  →  scripts/capture/*.py  →  viewer/*.html
-(core/ Rust)     bundle       equirect + DA3 cloud     panorama + cloud
+Phone camera + IMU ──► visual-inertial odometry (pose) ──┐
+                                                         ├──► TSDF fusion ──► mesh / point cloud / PLY
+Phone camera ────────► monocular depth (per frame) ──────┘
+                                     ▲
+                       scale fixed per frame against sparse VIO / ARCore points
 ```
+
+Monocular depth models give good relative shape but the wrong scale per frame. The pipeline anchors each
+frame to metric points from the motion estimate, rejects inconsistent pixels and flying edges, and only
+fuses depth when tracking is healthy. Every stage records what it measured: see the findings in
+[`docs/`](docs/) and [`video-recon/docs/`](video-recon/docs/).
+
+## Quick start
+
+### Panorama and point cloud from a capture
 
 ```bash
-# 1. Capture: stand still, turn, press "Take picture" at each target.
-adb pull /sdcard/Android/data/com.recon.poselogger/files/captures/bundle_<uuid> \
-    data/captures/
+uv sync
+# 1. Capture with clients/android: stand still, turn, press "Take picture" at each target
+adb pull /sdcard/Android/data/com.recon.poselogger/files/captures/bundle_<uuid> data/captures/
 
-source ~/ai/env.sh kepler          # GPU env + shared model store
+# 2. 360 panorama, projected by pose
+python scripts/capture/equirect.py data/captures/bundle_<uuid> out/sessions/equirect.jpg 4096
 
-# 2. 360 panorama, projected by pose (not by feature matching — see the doc)
-python scripts/capture/equirect.py \
-    data/captures/bundle_<uuid> out/sessions/equirect.jpg 4096
+# 3. Metric point cloud with Depth Anything 3 (small)
+python scripts/capture/da3_cloud.py data/captures/bundle_<uuid> out/cloud.bin small 900000
 
-# 3. Point cloud, DA3-Small
-python scripts/capture/da3_cloud.py \
-    data/captures/bundle_<uuid> out/cloud.bin small 900000
-
-# 4. Serve the viewers next to the artefacts they read
-cp viewer/panorama.html out/index.html
-cp viewer/cloud.html    out/cloud.html
-cd out && python -m http.server 8777 --bind 0.0.0.0
+# 4. View
+cp viewer/panorama.html out/index.html && cp viewer/cloud.html out/cloud.html
+cd out && python -m http.server 8777
 ```
 
-The cloud builder cleans by default: it removes flying depth-edge pixels, gives
-each frame one vote inside a voxel, and rejects a cell only when it lacks both
-multi-frame support and occupied neighbours. It does **not** delete a global
-distance percentile; exact geometry is retained while robust percentile bounds
-frame the initial viewer camera. Optional arguments after the point budget are
-`anchor_space`, `voxel_m`, `min_frame_support`, `min_neighbours`, and
-`max_spread_voxels`. Add `--depth-cache DEPTH.npz` to rebuild or tune the cloud
-without rerunning DA3.
+The cloud builder removes flying depth-edge pixels, gives each frame one vote per voxel, and rejects a
+cell only when it lacks both multi-frame support and occupied neighbours. Add `--depth-cache DEPTH.npz`
+to tune the cloud without rerunning the depth model.
 
-## Layout
+### Live Scan on the phone
 
+Build `video-recon/android` in Android Studio (arm64, Android 12+). The native build expects patched
+OpenVINS sources at `OV_ROOT` (see `video-recon/android/app/src/main/cpp/CMakeLists.txt`). Model files are
+not in this repository: export them with the scripts in `video-recon/vio/` and `video-recon/tools/` into
+`app/src/main/assets/models/`. Test steps are in
+[`video-recon/docs/live-reliability-2026-10-07.md`](video-recon/docs/live-reliability-2026-10-07.md).
+
+### Simulator
+
+```bash
+# one run with the live dashboard on port 8090 (worlds: apartment, corridor, open)
+python video-recon/sim/run.py --world apartment --seed 1 --pose gt --depth gt \
+    --duration 120 --out out/sim/demo --dashboard 8090
+
+# the pose x depth matrix
+python video-recon/sim/sweep.py --seeds 1 2 --duration 120
 ```
-clients/android/     Kotlin + ARCore capture app — manual shutter, guidance HUD
-core/                Shared Rust capture core + UniFFI bindings the app calls
-harness/recon/       The Python the capture path needs, and nothing more
-  schemas.py           SessionBundle wire types
-  io/bundle.py         reads a pulled bundle
-  depth/da3.py         Depth Anything 3 adapter
-  torch_compat.py      Kepler (sm_35) torch shims
-scripts/capture/     equirect.py, da3_cloud.py + two diagnostics
-viewer/              panorama.html, cloud.html — dependency-free single files
-docs/                capture-to-cloud.md — what worked, measured
-archive/             everything outside that path (git-ignored)
-```
+
+Results and findings: [`video-recon/docs/sim-results.md`](video-recon/docs/sim-results.md).
 
 ## Tests
 
 ```bash
-pytest harness/tests -q      # bundle/schema + Kepler-torch compatibility
-cd core && cargo test        # the shared capture core
+pytest harness/tests video-recon/tests -q
+cd core && cargo test
 cd clients/android && ./gradlew :app:testDebugUnitTest
 ```
 
-## Known-wrong, measured
+## Status
 
-The cloud comes out 11.0 × 5.4 × 14.4 m, which is not this room. Global scale is
-already right to 2.5%; the error is per-frame scale (frames disagree by 2.36×)
-and depth *shape* within each frame. `docs/capture-to-cloud.md` §6 has the
-measurement and the ranked fix list — a robust per-frame affine fit against the
-ARCore depth every frame already carries is the first and cheapest win.
+Research-grade and under active development. Honest state, measured:
+
+- **Panorama + cloud:** works end to end on real hardware (Samsung S23 Ultra). Per-frame scale fitting
+  cut frame-to-frame scale spread from 2.36× to 1.11× and median depth error from 0.36 m to 0.18 m
+  ([details](docs/capture-to-cloud.md)).
+- **Live Scan:** builds and runs on the phone, but handheld tracking is not yet reliable enough for
+  everyday use: startup, drift and relocalization are the open problems.
+- **Simulator:** runs the full closed loop; with real VIO in the loop, tracking is the weak link.
+
+See [ROADMAP.md](ROADMAP.md) for what's next.
+
+## Layout
+
+```
+clients/android/     Kotlin capture app: manual shutter, guidance HUD
+core/                Shared Rust capture core + UniFFI bindings
+harness/recon/       Python for the capture path: bundle I/O, depth adapters, Kepler torch shims
+scripts/capture/     equirect.py, da3_cloud.py and diagnostics
+viewer/              panorama.html, cloud.html: single-file viewers
+video-recon/         video + sensors reconstruction, Live Scan app, simulator, VIO tools
+docs/                design, measurements and the licensing audit
+```
+
+## License
+
+3d-recon is free software under the [GNU Affero General Public License v3.0](LICENSE).
+You can use, change and share it. If you distribute it, or run a modified version as a network service,
+you must publish the complete source under the same license.
+
+**Commercial licensing:** if AGPL doesn't work for your product, contact Charalambos Rotsides at
+[lhampis@gmail.com](mailto:lhampis@gmail.com) about a commercial license for the code in this repository.
+
+Copyright (C) 2026 Charalambos Rotsides
+
+### Third-party components
+
+| Component | License | Notes |
+|---|---|---|
+| [OpenVINS](https://github.com/rpng/open_vins) | GPL-3.0 | Compiled into Live Scan; sources not included |
+| Depth Anything V2 (Small) | Apache-2.0 | Weights not included |
+| [Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3) | Code Apache-2.0; weights vary by size | Weights not included; check the license of the size you use |
+| [XFeat](https://github.com/verlab/accelerated_features) | Apache-2.0 | Weights not included |
+| Ceres Solver | BSD-3-Clause | |
+| Metric3D, UniDepth | See upstream; UniDepth weights are non-commercial | Optional; only used by export tools |
+
+Model weights are never stored in this repository; you obtain them yourself under their own licenses.

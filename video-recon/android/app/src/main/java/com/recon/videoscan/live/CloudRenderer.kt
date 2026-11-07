@@ -16,15 +16,21 @@ import kotlin.math.sin
  * mode POV: camera placed at the live pose (upright, video field of view). mode ORBIT: touch orbit around a target.
  */
 class CloudRenderer(private val pov: Boolean) : GLSurfaceView.Renderer {
-    @Volatile var points: FloatBuffer? = null; @Volatile var pointCount = 0
+    @Volatile var points: FloatBuffer? = null
+    val pointCount get() = (points?.limit() ?: 0) / 6
     @Volatile var path = FloatArray(0)                 // trajectory x,y,z
     @Volatile var pose = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 1f)   // px,py,pz,qx,qy,qz,qw camera->world
     @Volatile var fovDeg = 60f
     var yaw = 0.6f; var pitch = 0.9f; var dist = 5f; val target = floatArrayOf(0f, 0f, 0f)
     private var program = 0; private var aPos = 0; private var aCol = 0; private var uMvp = 0; private var uSize = 0; private var uColor = 0; private var uUseColor = 0
     private val proj = FloatArray(16); private val view = FloatArray(16); private val mvp = FloatArray(16)
-    private var aspect = 1f; private var vbo = IntArray(1); private var uploaded = -1
+    private var aspect = 1f; private var vbo = IntArray(1); private var uploaded: FloatBuffer? = null
     private val frustum = FloatArray(16 * 3)
+    private var lineBuffer = ByteBuffer.allocateDirect(1024).order(ByteOrder.nativeOrder()).asFloatBuffer()
+    private var pathBuffer = ByteBuffer.allocateDirect(1024).order(ByteOrder.nativeOrder()).asFloatBuffer()
+    private var bufferedPath: FloatArray? = null
+    private var gridHeight = Float.NaN
+    private var grid = FloatArray(0)
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         val vs = """attribute vec3 aPos; attribute vec3 aCol; uniform mat4 uMvp; uniform float uSize; varying vec3 vCol;
@@ -39,6 +45,7 @@ class CloudRenderer(private val pov: Boolean) : GLSurfaceView.Renderer {
         aPos = GLES20.glGetAttribLocation(program, "aPos"); aCol = GLES20.glGetAttribLocation(program, "aCol")
         uMvp = GLES20.glGetUniformLocation(program, "uMvp"); uSize = GLES20.glGetUniformLocation(program, "uSize")
         uColor = GLES20.glGetUniformLocation(program, "uColor"); uUseColor = GLES20.glGetUniformLocation(program, "uUseColor")
+        uploaded = null
         GLES20.glGenBuffers(1, vbo, 0); GLES20.glClearColor(0.09f, 0.09f, 0.09f, 1f); GLES20.glEnable(GLES20.GL_DEPTH_TEST)
     }
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) { GLES20.glViewport(0, 0, width, height); aspect = width.toFloat() / height }
@@ -65,13 +72,19 @@ class CloudRenderer(private val pov: Boolean) : GLSurfaceView.Renderer {
         if (!pov) drawLines(gridLines(), 0.25f, 0.25f, 0.25f)
         // points
         val pts = points
-        if (pts != null && pointCount > 0) {
+        val count = (pts?.limit() ?: 0) / 6
+        if (pts != null && count > 0) {
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vbo[0])
-            if (uploaded != System.identityHashCode(pts)) { pts.position(0); GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, pointCount * 24, pts, GLES20.GL_DYNAMIC_DRAW); uploaded = System.identityHashCode(pts) }
+            if (uploaded !== pts) {
+                // GL contexts have independent upload state and buffer cursors.
+                val data = pts.duplicate().apply { position(0) }
+                GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, count * 24, data, GLES20.GL_DYNAMIC_DRAW)
+                uploaded = pts
+            }
             GLES20.glEnableVertexAttribArray(aPos); GLES20.glEnableVertexAttribArray(aCol)
             GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 24, 0); GLES20.glVertexAttribPointer(aCol, 3, GLES20.GL_FLOAT, false, 24, 12)
             GLES20.glUniform1f(uUseColor, 1f); GLES20.glUniform1f(uSize, if (pov) 14f else 8f)
-            GLES20.glDrawArrays(GLES20.GL_POINTS, 0, pointCount)
+            GLES20.glDrawArrays(GLES20.GL_POINTS, 0, count)
             GLES20.glDisableVertexAttribArray(aCol); GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
         }
         // trajectory and frustum (orbit view)
@@ -79,16 +92,26 @@ class CloudRenderer(private val pov: Boolean) : GLSurfaceView.Renderer {
     }
     private fun drawLines(v: FloatArray, r: Float, g: Float, b: Float, strip: Boolean = false) {
         if (v.size < 6) return
-        val buf = ByteBuffer.allocateDirect(v.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(v); buf.position(0)
+        var buf = if (strip) pathBuffer else lineBuffer
+        if (buf.capacity() < v.size) {
+            buf = ByteBuffer.allocateDirect(v.size * 8).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            if (strip) pathBuffer = buf else lineBuffer = buf
+        }
+        if (!strip || bufferedPath !== v) {
+            buf.clear(); buf.put(v); buf.flip()
+            if (strip) bufferedPath = v
+        }
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
         GLES20.glEnableVertexAttribArray(aPos); GLES20.glDisableVertexAttribArray(aCol)
         GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, buf)
         GLES20.glUniform1f(uUseColor, 0f); GLES20.glUniform3f(uColor, r, g, b); GLES20.glLineWidth(2f)
         GLES20.glDrawArrays(if (strip) GLES20.GL_LINE_STRIP else GLES20.GL_LINES, 0, v.size / 3)
     }
-    private fun gridLines(): FloatArray { val n = 12; val out = FloatArray(n * 2 * 2 * 3 + 12); var k = 0; val y = target[1] - 1.3f
+    private fun gridLines(): FloatArray { val y = target[1] - 1.3f
+        if (y == gridHeight) return grid
+        val n = 12; val out = FloatArray(n * 2 * 2 * 3 + 12); var k = 0
         for (i in -n / 2..n / 2) { for (v in floatArrayOf(i.toFloat(), y, -n / 2f, i.toFloat(), y, n / 2f, -n / 2f, y, i.toFloat(), n / 2f, y, i.toFloat())) if (k < out.size) out[k++] = v }
-        return out.copyOf(k) }
+        gridHeight = y; grid = out.copyOf(k); return grid }
     private fun frustumLines(p: FloatArray): FloatArray {
         val r = quatToMat(p[3], p[4], p[5], p[6]); val d = 0.4f; val t = d * 0.35f; val s = d * 0.62f
         val c = floatArrayOf(0f, 0f, 0f, -s, -t, -d, s, -t, -d, s, t, -d, -s, t, -d)
